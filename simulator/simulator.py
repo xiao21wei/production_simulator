@@ -119,7 +119,7 @@ class Simulator:
             for j in range(machine_count):
                 if i < j:
                     temp_time = random.randint(1, 3)
-                    temp_energy = 4 * temp_time
+                    temp_energy = random.randint(1,4) * temp_time
                     transport_time[i][j] = temp_time
                     transport_time[j][i] = temp_time
                     transport_energy[i][j] = temp_energy
