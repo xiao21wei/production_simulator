@@ -34,7 +34,11 @@ def load_model(device=None, model_path=None):
     if os.path.exists(model_path):
         try:
             # 尝试加载 state_dict
-            checkpoint = torch.load(model_path, map_location=device)
+            checkpoint = torch.load(
+                model_path,
+                map_location=device,
+                weights_only=True,
+            )
             if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
                  model.load_state_dict(checkpoint['state_dict'])
             elif isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
@@ -54,11 +58,13 @@ def load_model(device=None, model_path=None):
     model.eval()
     return model
 
-def load_data(machine_id):
+def load_data(machine_id, data_dir=None):
     """
     加载特定机器的 CSV 数据。
     """
-    file_path = f'model_predict/data/machines/machine_{machine_id}.csv'
+    if data_dir is None:
+        data_dir = 'model_predict/data/machines'
+    file_path = os.path.join(data_dir, f'machine_{machine_id}.csv')
     if not os.path.exists(file_path):
         return None
         

@@ -4,7 +4,8 @@ import os
 import random
 
 def generate_machine_datasets(num_machines, min_len, normal_len_lower=250, normal_len_upper=1250, anomaly_len_lower=10, anomaly_len_upper=19, 
-                              base_data_path='model_predict/data/anomaly/anomaly.csv', output_dir='model_predict/data/machines', seed = 42):
+                              base_data_path='model_predict/data/anomaly/anomaly.csv', output_dir='model_predict/data/machines', seed = 42,
+                              log_tag=True):
     """
     生成机器数据集。
 
@@ -25,8 +26,6 @@ def generate_machine_datasets(num_machines, min_len, normal_len_lower=250, norma
     anomaly_len_lower = anomaly_len_lower * 2
     anomaly_len_upper = anomaly_len_upper * 2
     random.seed(seed)
-
-    log_tag = True
 
     # 确保输出目录存在
     if not os.path.exists(output_dir):

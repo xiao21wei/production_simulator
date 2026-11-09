@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "properties": {
+    "raw_lines": {
+      "type": "string",
+      "minLength": 1,
+      "description": "FJSP raw file content. The first line is num_jobs num_machines metadata, followed by one job row per job. The third header value is currently unused."
+    },
+    "additional_lines": {
+      "type": "string",
+      "minLength": 1,
+      "description": "FJSP additional-information file content: processing energy rows, job feature rows, transport-time matrix and transport-energy matrix."
+    },
+    "instance_name": {
+      "type": "string",
+      "default": "instance",
+      "description": "Optional display name. It is sanitized before use."
+    },
+    "num_samples": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 10,
+      "description": "Number of stochastic DRL-S trajectories to sample. The best feasible sample is returned."
+    },
+    "seed": {
+      "type": "integer",
+      "default": 0,
+      "description": "Random seed used for reproducible sampling."
+    }
+  },
+  "required": [
+    "raw_lines",
+    "additional_lines"
+  ],
+  "additionalProperties": false
+}

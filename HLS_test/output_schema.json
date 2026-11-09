@@ -1,0 +1,116 @@
+{
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean"
+    },
+    "instance_name": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "device": {
+      "type": "string"
+    },
+    "n_jobs": {
+      "type": "integer"
+    },
+    "n_machines": {
+      "type": "integer"
+    },
+    "n_operations": {
+      "type": "integer"
+    },
+    "objectives": {
+      "type": "object",
+      "properties": {
+        "makespan": {
+          "type": "integer",
+          "description": "Maximum completion time; lower is better."
+        }
+      },
+      "required": [
+        "makespan"
+      ],
+      "additionalProperties": false
+    },
+    "runtime_seconds": {
+      "type": "number"
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "copt_enabled": {
+      "type": "boolean",
+      "description": "Always false for this deployment build."
+    },
+    "additional_data_used": {
+      "type": "boolean",
+      "description": "Always false because current HLS optimizes makespan only."
+    },
+    "additional_data_valid": {
+      "type": "boolean"
+    },
+    "feasible": {
+      "type": "boolean"
+    },
+    "schedule": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "integer"
+          },
+          "operation_index": {
+            "type": "integer"
+          },
+          "operation_id": {
+            "type": "integer"
+          },
+          "machine_id": {
+            "type": "integer"
+          },
+          "start_time": {
+            "type": "number"
+          },
+          "end_time": {
+            "type": "number"
+          },
+          "processing_time": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "job_id",
+          "operation_index",
+          "operation_id",
+          "machine_id",
+          "start_time",
+          "end_time",
+          "processing_time"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "success",
+    "instance_name",
+    "model",
+    "device",
+    "n_jobs",
+    "n_machines",
+    "n_operations",
+    "objectives",
+    "runtime_seconds",
+    "seed",
+    "copt_enabled",
+    "additional_data_used",
+    "additional_data_valid",
+    "feasible",
+    "schedule"
+  ],
+  "additionalProperties": false
+}

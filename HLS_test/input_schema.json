@@ -1,0 +1,69 @@
+{
+  "type": "object",
+  "properties": {
+    "raw_lines": {
+      "type": "string",
+      "minLength": 1,
+      "description": "HLS raw/*.fjs file content. The header is num_jobs num_machines metadata, followed by one job row per job."
+    },
+    "additional_lines": {
+      "type": "string",
+      "description": "Optional paired add/*.fjs content. It is validated for interface compatibility but transport, energy and due-date objectives are not used by the current makespan-only HLS solver."
+    },
+    "instance_name": {
+      "type": "string",
+      "default": "instance",
+      "description": "Optional display name. Path components and unsupported characters are removed."
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "default": 0,
+      "description": "Random seed for HLS search."
+    },
+    "total_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300,
+      "default": 20,
+      "description": "Total wall-clock search limit."
+    },
+    "search_mode": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.6
+    },
+    "random_strategy": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.5
+    },
+    "max_repeat_count": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1000
+    },
+    "max_iter_count": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 45
+    },
+    "population_size": {
+      "type": "integer",
+      "minimum": 2,
+      "default": 32
+    },
+    "tabu_length": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30
+    }
+  },
+  "required": [
+    "raw_lines"
+  ],
+  "additionalProperties": false
+}

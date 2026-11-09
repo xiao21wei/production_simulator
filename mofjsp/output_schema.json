@@ -1,0 +1,118 @@
+{
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean"
+    },
+    "instance_name": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "device": {
+      "type": "string"
+    },
+    "num_samples": {
+      "type": "integer"
+    },
+    "best_sample": {
+      "type": "integer",
+      "description": "Zero-based index of the selected sample."
+    },
+    "n_jobs": {
+      "type": "integer"
+    },
+    "n_machines": {
+      "type": "integer"
+    },
+    "n_operations": {
+      "type": "integer"
+    },
+    "objectives": {
+      "type": "object",
+      "properties": {
+        "makespan": {
+          "type": "number",
+          "description": "Maximum completion time; lower is better."
+        },
+        "energy": {
+          "type": "number",
+          "description": "Total processing and transport energy; lower is better."
+        },
+        "penalty": {
+          "type": "number",
+          "description": "Earliness/tardiness penalty; lower is better."
+        }
+      },
+      "required": [
+        "makespan",
+        "energy",
+        "penalty"
+      ],
+      "additionalProperties": false
+    },
+    "feasible": {
+      "type": "boolean",
+      "description": "Whether machine overlap, operation order and completeness checks passed."
+    },
+    "schedule": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "description": "Zero-based job index."
+          },
+          "operation_index": {
+            "type": "integer",
+            "description": "Zero-based operation index within the job."
+          },
+          "operation_id": {
+            "type": "integer",
+            "description": "Zero-based global operation index."
+          },
+          "machine_id": {
+            "type": "integer",
+            "description": "Zero-based machine index."
+          },
+          "start_time": {
+            "type": "number"
+          },
+          "end_time": {
+            "type": "number"
+          },
+          "processing_time": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "job_id",
+          "operation_index",
+          "operation_id",
+          "machine_id",
+          "start_time",
+          "end_time",
+          "processing_time"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "success",
+    "instance_name",
+    "model",
+    "device",
+    "num_samples",
+    "best_sample",
+    "n_jobs",
+    "n_machines",
+    "n_operations",
+    "objectives",
+    "feasible",
+    "schedule"
+  ],
+  "additionalProperties": false
+}

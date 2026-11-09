@@ -1,0 +1,594 @@
+flowMeta:
+  name: HLS 柔性作业车间调度模型（北航）
+  description: 调用 HLS 本地模型生成柔性作业车间调度方案，并按机器输出工序序列。
+  avatarIcon: /src/assets/svgs/icon_ai-copy.svg
+  avatarColor: '#FFEAD5'
+  advancedConfig: '{"prologue":{"enabled":true,"inputExample":[""]},"textToSpeech":{"enabled":true,"vcn_cn":"x5_lingxiaotang_flow","vcn_en":""}}'
+  dslVersion: v1
+flowData:
+  nodes:
+  - id: node-start::7e50a889-c505-4bf8-ace8-e5ec69301b64
+    dragging: false
+    selected: false
+    width: 302
+    height: 122
+    position:
+      x: -760
+      y: 500
+    positionAbsolute:
+      x: -760
+      y: 500
+    type: custom
+    data:
+      allowInputReference: false
+      allowOutputReference: true
+      label: 开始
+      status: ''
+      nodeMeta:
+        aliasName: 开始节点
+        nodeType: 基础节点
+      inputs: [
+        ]
+      outputs:
+      - id: fff94ce6-c2ba-496e-89f7-f534b2151799
+        name: AGENT_USER_INPUT
+        nameErrMsg: ''
+        schema:
+          type: string
+          default: 用户本轮对话输入内容
+        required: false
+        deleteDisabled: true
+      nodeParam: {
+        }
+      icon: https://oss-beijing-m8.openstorage.cn/pro-bucket/sparkBot/common/workflow/icon/start-node-icon.png
+      description: 工作流的开启节点，用于定义流程调用所需的业务变量信息。
+      updatable: false
+  - id: node-end::a811850e-fe7b-4c32-9007-820923fe2d2b
+    dragging: false
+    selected: false
+    width: 302
+    height: 122
+    position:
+      x: 1400
+      y: 500
+    positionAbsolute:
+      x: 1400
+      y: 500
+    type: custom
+    data:
+      allowInputReference: true
+      allowOutputReference: false
+      label: 结束
+      references: [
+        ]
+      status: ''
+      nodeMeta:
+        aliasName: 结束节点
+        nodeType: 基础节点
+      inputs:
+      - id: 554ce977-6b9e-434e-95c8-ef51b565f76d
+        name: output
+        nameErrMsg: ''
+        schema:
+          type: object
+          value:
+            type: ref
+            content:
+              id: 554ce977-6b9e-434e-95c8-ef51b565f76d
+              nodeId: ifly-code::932ae1c1-4ff5-452c-9b54-1e06c8f770e0
+              name: output
+            contentErrMsg: ''
+        fileType: ''
+      outputs: [
+        ]
+      nodeParam:
+        template: ''
+        streamOutput: true
+        outputMode: 0
+        templateErrMsg: 值不能为空
+      icon: https://oss-beijing-m8.openstorage.cn/pro-bucket/sparkBot/common/workflow/icon/end-node-icon.png
+      description: 工作流的结束节点，用于输出工作流运行后的最终结果。
+      updatable: false
+  - id: ifly-code::2ad11191-ed6d-4b51-af56-c576cd7fdf31
+    dragging: false
+    selected: false
+    width: 362
+    height: 148
+    position:
+      x: -350
+      y: 485
+    positionAbsolute:
+      x: -350
+      y: 485
+    type: custom
+    data:
+      allowInputReference: true
+      allowOutputReference: true
+      label: 解析模型输入
+      labelEdit: false
+      references: [
+        ]
+      status: ''
+      nodeMeta:
+        nodeType: 工具
+        aliasName: 代码
+      inputs:
+      - id: 9e9f7a89-98f6-4c65-8e3b-da007a81f1f3
+        name: input
+        nameErrMsg: ''
+        schema:
+          type: string
+          value:
+            type: ref
+            content:
+              id: fff94ce6-c2ba-496e-89f7-f534b2151799
+              nodeId: node-start::7e50a889-c505-4bf8-ace8-e5ec69301b64
+              name: AGENT_USER_INPUT
+            contentErrMsg: ''
+        fileType: ''
+      outputs:
+      - id: 236bc860-6ab9-40d6-9caf-dbabbee88321
+        name: raw_lines
+        nameErrMsg: ''
+        schema:
+          type: string
+          default: ''
+      - id: a98e6431-c62a-483e-b917-00bc40d74590
+        name: additional_lines
+        nameErrMsg: ''
+        schema:
+          type: string
+          default: ''
+      - id: cc6bee53-170e-4cf3-b4de-e1922c45b23a
+        name: instance_name
+        nameErrMsg: ''
+        schema:
+          type: string
+          default: ''
+      - id: f57c2864-f00a-4a50-b4ef-a9f7aefc889a
+        name: seed
+        nameErrMsg: ''
+        schema:
+          type: integer
+          default: 0
+      - id: 177faefe-8614-46fd-be8d-1d7355a89940
+        name: total_time_seconds
+        nameErrMsg: ''
+        schema:
+          type: integer
+          default: 20
+      - id: 67f739cf-aaf8-4d30-90b1-667083dba4df
+        name: search_mode
+        nameErrMsg: ''
+        schema:
+          type: number
+          default: 0.6
+      - id: 01b026f8-8be3-475c-9d15-81c01499eb92
+        name: random_strategy
+        nameErrMsg: ''
+        schema:
+          type: number
+          default: 0.5
+      - id: 233949c8-7b63-49e7-962b-13c7a70d54ea
+        name: max_repeat_count
+        nameErrMsg: ''
+        schema:
+          type: integer
+          default: 1000
+      - id: 357bc73f-5f3c-4bb4-b311-770b24959e8e
+        name: max_iter_count
+        nameErrMsg: ''
+        schema:
+          type: integer
+          default: 45
+      - id: 010552f0-f814-462e-8da4-2117b9ce03a2
+        name: population_size
+        nameErrMsg: ''
+        schema:
+          type: integer
+          default: 32
+      - id: 01d43d39-4327-4bf2-b8a6-cc5dcaf0dae5
+        name: tabu_length
+        nameErrMsg: ''
+        schema:
+          type: integer
+          default: 30
+      - id: 2b202f44-5bf1-4fad-8c14-91cf096c1ef2
+        name: output
+        nameErrMsg: ''
+        schema:
+          type: object
+          properties: [
+            ]
+          default: {
+            }
+      nodeParam:
+        code: |
+          # -*- coding: utf-8 -*-
+          import json
+          import re
+
+          _FENCE = re.compile(
+              r"^\s*```(?:json)?\s*(.*?)\s*```\s*$",
+              re.IGNORECASE | re.DOTALL,
+          )
+
+          def _decode(value):
+              if isinstance(value, dict):
+                  return value
+              if not isinstance(value, str) or not value.strip():
+                  raise ValueError("input must be a non-empty JSON string")
+              text = value.lstrip("\ufeff").strip()
+              match = _FENCE.match(text)
+              if match:
+                  text = match.group(1).strip()
+              value = json.loads(text)
+              if isinstance(value, dict) and set(value) == {"input"}:
+                  value = value["input"]
+              if not isinstance(value, dict):
+                  raise ValueError("input must decode to a JSON object")
+              return value
+
+          def _integer(data, key, default):
+              value = data.get(key, default)
+              if isinstance(value, bool):
+                  raise ValueError(f"{key} must be an integer")
+              try:
+                  return int(value)
+              except (TypeError, ValueError) as exc:
+                  raise ValueError(f"{key} must be an integer") from exc
+
+          def _number(data, key, default):
+              value = data.get(key, default)
+              if isinstance(value, bool):
+                  raise ValueError(f"{key} must be a number")
+              try:
+                  return float(value)
+              except (TypeError, ValueError) as exc:
+                  raise ValueError(f"{key} must be a number") from exc
+
+          def main(input=None, **kwargs):
+              if input is None:
+                  for key in ("text", "content", "data", "value"):
+                      if kwargs.get(key) is not None:
+                          input = kwargs[key]
+                          break
+              data = _decode(input)
+
+              raw_lines = data.get("raw_lines")
+              if not isinstance(raw_lines, str) or not raw_lines.strip():
+                  raise ValueError("raw_lines must be a non-empty string")
+
+              additional_lines = data.get("additional_lines", "")
+              if additional_lines is None:
+                  additional_lines = ""
+              if not isinstance(additional_lines, str):
+                  raise ValueError("additional_lines must be a string")
+
+              instance_name = str(data.get("instance_name") or "instance")
+              seed = _integer(data, "seed", 0)
+              total_time = _integer(data, "total_time_seconds", 20)
+              search_mode = _number(data, "search_mode", 0.6)
+              random_strategy = _number(data, "random_strategy", 0.5)
+              max_repeat = _integer(data, "max_repeat_count", 1000)
+              max_iter = _integer(data, "max_iter_count", 45)
+              population = _integer(data, "population_size", 32)
+              tabu_length = _integer(data, "tabu_length", 30)
+
+              if not 1 <= total_time <= 300:
+                  raise ValueError("total_time_seconds must be between 1 and 300")
+              if not 0.0 <= search_mode <= 1.0:
+                  raise ValueError("search_mode must be between 0 and 1")
+              if not 0.0 <= random_strategy <= 1.0:
+                  raise ValueError("random_strategy must be between 0 and 1")
+              if max_repeat <= 0 or max_iter <= 0 or tabu_length <= 0:
+                  raise ValueError("search counts and tabu_length must be positive")
+              if population < 2:
+                  raise ValueError("population_size must be at least 2")
+
+              result = {
+                  "raw_lines": raw_lines,
+                  "additional_lines": additional_lines,
+                  "instance_name": instance_name,
+                  "seed": seed,
+                  "total_time_seconds": total_time,
+                  "search_mode": search_mode,
+                  "random_strategy": random_strategy,
+                  "max_repeat_count": max_repeat,
+                  "max_iter_count": max_iter,
+                  "population_size": population,
+                  "tabu_length": tabu_length,
+              }
+              return {**result, "output": result}
+        appId: 680ab54f
+        uid: e7c82078-4c8f-4f18-a845-1d299e60bf47
+        codeErrMsg: ''
+        setAnswerContentErrMsg: ''
+      retryConfig:
+        shouldRetry: false
+        errorStrategy: 0
+      icon: https://oss-beijing-m8.openstorage.cn/pro-bucket/sparkBot/common/workflow/icon/codeIcon.png
+      description: 解析 HLS 模型输入，补齐搜索参数默认值并校验取值范围。
+      updatable: false
+  - id: ifly-code::1a1b3eaf-9fd4-4b58-9401-bb05b43e2145
+    dragging: false
+    selected: false
+    width: 362
+    height: 148
+    position:
+      x: 55
+      y: 485
+    positionAbsolute:
+      x: 55
+      y: 485
+    type: custom
+    data:
+      allowInputReference: true
+      allowOutputReference: true
+      label: 调用 HLS 本地模型
+      labelEdit: false
+      references: [
+        ]
+      status: ''
+      nodeMeta:
+        nodeType: 工具
+        aliasName: 代码
+      inputs:
+      - id: 932ae1c1-4ff5-452c-9b54-1e06c8f770e0
+        name: input
+        nameErrMsg: ''
+        schema:
+          type: object
+          value:
+            type: ref
+            content:
+              id: 2b202f44-5bf1-4fad-8c14-91cf096c1ef2
+              nodeId: ifly-code::2ad11191-ed6d-4b51-af56-c576cd7fdf31
+              name: output
+            contentErrMsg: ''
+        fileType: ''
+      outputs:
+      - id: 0c7f9e2e-211a-4922-bef8-876001a62c43
+        name: output
+        nameErrMsg: ''
+        schema:
+          type: object
+          properties: [
+            ]
+          default: {
+            }
+      nodeParam:
+        code: |
+          # -*- coding: utf-8 -*-
+          import json
+          import urllib.error
+          import urllib.request
+
+          MODEL_ENDPOINT = "http://127.0.0.1:39004/schedule"
+          MODEL_INPUT_FIELDS = (
+              "raw_lines",
+              "additional_lines",
+              "instance_name",
+              "seed",
+              "total_time_seconds",
+              "search_mode",
+              "random_strategy",
+              "max_repeat_count",
+              "max_iter_count",
+              "population_size",
+              "tabu_length",
+          )
+
+          def _request(payload):
+              request = urllib.request.Request(
+                  MODEL_ENDPOINT,
+                  data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(request, timeout=140) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          def main(input=None, **kwargs):
+              if input is None:
+                  for key in ("output", "data", "result"):
+                      if kwargs.get(key) is not None:
+                          input = kwargs[key]
+                          break
+              if isinstance(input, str):
+                  input = json.loads(input)
+              if not isinstance(input, dict):
+                  raise ValueError("input must decode to a model input object")
+
+              payload = {
+                  key: input[key]
+                  for key in MODEL_INPUT_FIELDS
+                  if key in input
+              }
+              try:
+                  result = _request(payload)
+              except urllib.error.HTTPError as first_error:
+                  detail = first_error.read().decode("utf-8", errors="replace")
+                  expects_wrapper = (
+                      first_error.code == 400
+                      and '"loc":["request"]' in detail.replace(" ", "")
+                  )
+                  if not expects_wrapper:
+                      raise RuntimeError(
+                          f"local model returned HTTP {first_error.code}: {detail}"
+                      ) from first_error
+                  try:
+                      result = _request({"request": payload})
+                  except urllib.error.HTTPError as second_error:
+                      second_detail = second_error.read().decode(
+                          "utf-8",
+                          errors="replace",
+                      )
+                      raise RuntimeError(
+                          f"local model returned HTTP {second_error.code}: "
+                          f"{second_detail}"
+                      ) from second_error
+              return {"output": result}
+        appId: 680ab54f
+        uid: e7c82078-4c8f-4f18-a845-1d299e60bf47
+        codeErrMsg: ''
+        setAnswerContentErrMsg: ''
+      retryConfig:
+        maxRetries: 1
+        shouldRetry: true
+        errorStrategy: 0
+        timeout: 160
+      icon: https://oss-beijing-m8.openstorage.cn/pro-bucket/sparkBot/common/workflow/icon/codeIcon.png
+      description: 将 HLS 模型输入发送到本地 39004 端口的 /schedule 接口。
+      updatable: false
+  - id: ifly-code::932ae1c1-4ff5-452c-9b54-1e06c8f770e0
+    dragging: false
+    selected: false
+    width: 362
+    height: 148
+    position:
+      x: 720
+      y: 485
+    positionAbsolute:
+      x: 720
+      y: 485
+    type: custom
+    data:
+      allowInputReference: true
+      allowOutputReference: true
+      label: 生成机器工序序列
+      labelEdit: false
+      references: [
+        ]
+      status: ''
+      nodeMeta:
+        nodeType: 工具
+        aliasName: 代码
+      inputs:
+      - id: c157325e-64a4-4c5d-b9bc-969661042933
+        name: input
+        nameErrMsg: ''
+        schema:
+          type: object
+          value:
+            type: ref
+            content:
+              id: 0c7f9e2e-211a-4922-bef8-876001a62c43
+              nodeId: ifly-code::1a1b3eaf-9fd4-4b58-9401-bb05b43e2145
+              name: output
+            contentErrMsg: ''
+        fileType: ''
+      outputs:
+      - id: 554ce977-6b9e-434e-95c8-ef51b565f76d
+        name: output
+        nameErrMsg: ''
+        schema:
+          type: object
+          properties: [
+            ]
+          default: {
+            }
+      nodeParam:
+        code: |
+          # -*- coding: utf-8 -*-
+          import json
+
+          def main(input=None, **kwargs):
+              if input is None:
+                  for key in ("output", "data", "result"):
+                      if kwargs.get(key) is not None:
+                          input = kwargs[key]
+                          break
+              if isinstance(input, str):
+                  input = json.loads(input)
+              if not isinstance(input, dict):
+                  raise ValueError("model output must be a JSON object")
+
+              result = dict(input)
+              schedule = result.get("schedule")
+              if not isinstance(schedule, list):
+                  raise ValueError("model output must contain a schedule array")
+
+              rows_by_machine = {}
+              for row in schedule:
+                  if not isinstance(row, dict):
+                      raise ValueError("each schedule item must be an object")
+                  machine_id = int(row["machine_id"])
+                  rows_by_machine.setdefault(machine_id, []).append(row)
+
+              declared_machines = int(result.get("n_machines") or 0)
+              machine_count = max(
+                  declared_machines,
+                  max(rows_by_machine, default=-1) + 1,
+              )
+
+              machine_sequences = []
+              for machine_id in range(machine_count):
+                  ordered_rows = sorted(
+                      rows_by_machine.get(machine_id, []),
+                      key=lambda row: (
+                          float(row["start_time"]),
+                          float(row["end_time"]),
+                          int(row["job_id"]),
+                          int(row["operation_index"]),
+                      ),
+                  )
+                  machine_sequences.append(
+                      [
+                          [
+                              int(row["job_id"]),
+                              int(row["operation_index"]),
+                          ]
+                          for row in ordered_rows
+                      ]
+                  )
+
+              result["schedule"] = machine_sequences
+              return {"output": result}
+        appId: 680ab54f
+        uid: e7c82078-4c8f-4f18-a845-1d299e60bf47
+        codeErrMsg: ''
+        setAnswerContentErrMsg: ''
+      retryConfig:
+        shouldRetry: false
+        errorStrategy: 0
+      icon: https://oss-beijing-m8.openstorage.cn/pro-bucket/sparkBot/common/workflow/icon/codeIcon.png
+      description: 按机器分组，并按加工开始时间排列工序，生成每台机器对应的 [job_id, operation_index] 序列。
+      updatable: false
+  edges:
+  - source: node-start::7e50a889-c505-4bf8-ace8-e5ec69301b64
+    target: ifly-code::2ad11191-ed6d-4b51-af56-c576cd7fdf31
+    type: customEdge
+    id: reactflow__edge-node-start::7e50a889-c505-4bf8-ace8-e5ec69301b64-ifly-code::2ad11191-ed6d-4b51-af56-c576cd7fdf31
+    markerEnd:
+      type: arrow
+      color: '#6356EA'
+    data:
+      edgeType: curve
+  - source: ifly-code::2ad11191-ed6d-4b51-af56-c576cd7fdf31
+    target: ifly-code::1a1b3eaf-9fd4-4b58-9401-bb05b43e2145
+    type: customEdge
+    id: reactflow__edge-ifly-code::2ad11191-ed6d-4b51-af56-c576cd7fdf31-ifly-code::1a1b3eaf-9fd4-4b58-9401-bb05b43e2145
+    markerEnd:
+      type: arrow
+      color: '#6356EA'
+    data:
+      edgeType: curve
+  - source: ifly-code::1a1b3eaf-9fd4-4b58-9401-bb05b43e2145
+    target: ifly-code::932ae1c1-4ff5-452c-9b54-1e06c8f770e0
+    type: customEdge
+    id: reactflow__edge-ifly-code::1a1b3eaf-9fd4-4b58-9401-bb05b43e2145-ifly-code::932ae1c1-4ff5-452c-9b54-1e06c8f770e0
+    markerEnd:
+      type: arrow
+      color: '#6356EA'
+    data:
+      edgeType: curve
+  - source: ifly-code::932ae1c1-4ff5-452c-9b54-1e06c8f770e0
+    target: node-end::a811850e-fe7b-4c32-9007-820923fe2d2b
+    type: customEdge
+    id: reactflow__edge-ifly-code::932ae1c1-4ff5-452c-9b54-1e06c8f770e0-node-end::a811850e-fe7b-4c32-9007-820923fe2d2b
+    markerEnd:
+      type: arrow
+      color: '#6356EA'
+    data:
+      edgeType: curve

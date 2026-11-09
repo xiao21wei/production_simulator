@@ -1,3 +1,21 @@
+from dataclasses import dataclass
+
+
+@dataclass
+class PlannedOperation:
+    job_id: int
+    operation_id: int
+    machine_id: int
+    start_time: float
+    end_time: float
+    source_machine: int | None = None
+    transport_start: float | None = None
+    transport_end: float | None = None
+    transport_time: float = 0
+    transport_energy: float = 0
+    waiting_time: float = 0
+
+
 class Schedule:
     def __init__(self, schedule_id, machine_count, schedule_items, start_time, end_time):
         self.schedule_id = schedule_id
@@ -32,7 +50,6 @@ class Schedule:
         gantt_str += "displayMode: compact\n"
         gantt_str += "config:\n"
         gantt_str += "    themeCSS: |\n"
-        gantt_str += "        #failure { fill: #cd4a1aff; stroke: #000000; stroke-width: 1px }\n"
         gantt_str += "        .placeholder { fill: transparent; stroke: transparent; }\n"
         gantt_str += "    gantt:\n"
         gantt_str += "        barHeight: 120\n"
@@ -54,11 +71,6 @@ class Schedule:
                 start_time = self.start_time[i][j]
                 end_time = self.end_time[i][j]
                 gantt_str += f"        J{job_id}-{operation_id}: J{job_id}, {start_time}, {end_time}\n"
-            # 添加机器故障时间段
-            for failure in machines[i].failures:
-                b = True
-                fail_start, fail_detect, fail_end = failure
-                gantt_str += f"        F{i}: failure, {fail_detect}, {fail_end}\n"
             if not b:
                 gantt_str += f"        placeholder: placeholder, 0, 0\n"
         # 将甘特图字符串写入文件

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>生产调度实时仿真</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <div>
+        <h1>生产调度实时仿真</h1>
+        <p>Production Scheduling Digital Twin</p>
+      </div>
+    </div>
+
+    <div class="metrics">
+      <div class="metric">
+        <span>仿真时刻</span>
+        <strong id="current-time">0</strong>
+      </div>
+      <div class="metric">
+        <span>完工时间</span>
+        <strong id="makespan">--</strong>
+      </div>
+      <div class="metric">
+        <span>完成作业</span>
+        <strong id="finished-jobs">0 / 0</strong>
+      </div>
+      <div class="metric">
+        <span>总能耗</span>
+        <strong id="total-energy">--</strong>
+      </div>
+      <div class="metric">
+        <span>交付成本</span>
+        <strong id="delivery-penalty">--</strong>
+      </div>
+    </div>
+
+    <div class="controls">
+      <span id="connection-status" class="status-pill idle">准备中</span>
+      <label>
+        倍速
+        <select id="speed-select">
+          <option value="1">1x</option>
+          <option value="2">2x</option>
+          <option value="5" selected>5x</option>
+          <option value="10">10x</option>
+        </select>
+      </label>
+      <label>
+        显示
+        <select id="display-select">
+          <option value="50">50%</option>
+          <option value="75">75%</option>
+          <option value="100" selected>100%</option>
+          <option value="125">125%</option>
+          <option value="150">150%</option>
+          <option value="200">200%</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <section class="run-toolbar">
+    <label class="dataset-picker" for="dataset-select">仿真数据源</label>
+    <select id="dataset-select" aria-label="选择仿真数据源">
+      <option value="">正在读取数据集...</option>
+    </select>
+    <div class="insert-actions">
+      <label class="auto-job-toggle" for="auto-job-submit">
+        <input id="auto-job-submit" type="checkbox">
+        <span>自动插单</span>
+      </label>
+      <button
+        id="manual-job-insert-button"
+        class="secondary-button toolbar-action-button"
+        type="button"
+        disabled
+      >
+        手动插单
+      </button>
+    </div>
+    <label class="reoptimizer-picker" for="reoptimizer-select">
+      重调度方式
+    </label>
+    <select id="reoptimizer-select" aria-label="选择重调度方式">
+      <option value="mofjsp" selected>DRL</option>
+      <option value="hls">HLS</option>
+    </select>
+    <button id="reoptimize-button" class="secondary-button" type="button" disabled>
+      执行重调度
+    </button>
+    <button id="start-button" type="button">启动仿真</button>
+  </section>
+
+  <main class="dashboard">
+    <section class="panel schedule-panel">
+      <div class="panel-heading schedule-heading">
+        <div>
+          <span class="eyebrow">MACHINE TIMELINE</span>
+          <h2>工序调度动画</h2>
+        </div>
+        <div id="clock-readout" class="clock-readout">T+0000</div>
+      </div>
+
+      <div class="timeline-shell">
+        <div class="timeline-axis-row">
+          <div class="machine-label-spacer">设备</div>
+          <div class="time-axis-wrap">
+            <div id="time-axis" class="time-axis"></div>
+          </div>
+          <div class="pending-axis-header">待加工队列</div>
+        </div>
+        <div class="timeline-viewport">
+          <div class="timeline-playhead-layer">
+            <div id="playhead" class="playhead"></div>
+          </div>
+          <div
+            id="timeline-body"
+            class="timeline-body"
+            tabindex="0"
+            aria-label="机器工序时间轴，可上下滚动查看全部机器"
+          >
+            <div id="machine-lanes" class="machine-lanes"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><i class="legend-dot pending"></i>待加工队列</span>
+        <span><i class="legend-dot running"></i>加工中</span>
+        <span><i class="legend-dot completed"></i>已完成</span>
+        <span><i class="legend-dot transport"></i>机器间运输</span>
+        <span class="legend-note">同色代表同一工件 · 中心为当前时刻 · 纵向滚动查看全部机器</span>
+      </div>
+    </section>
+
+    <aside class="panel event-panel">
+      <div class="panel-heading">
+        <div>
+          <span class="eyebrow">EVENT BUS</span>
+          <h2>事件列表</h2>
+        </div>
+        <span id="event-count" class="count-badge">0</span>
+      </div>
+      <div id="event-list" class="event-list">
+        <div class="empty-state">等待仿真启动</div>
+      </div>
+    </aside>
+  </main>
+
+  <div id="error-banner" class="error-banner hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
