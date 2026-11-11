@@ -45,9 +45,8 @@
         倍速
         <select id="speed-select">
           <option value="1">1x</option>
-          <option value="2">2x</option>
-          <option value="5" selected>5x</option>
-          <option value="10">10x</option>
+          <option value="2" selected>2x</option>
+          <option value="5">5x</option>
         </select>
       </label>
       <label>
@@ -69,20 +68,6 @@
     <select id="dataset-select" aria-label="选择仿真数据源">
       <option value="">正在读取数据集...</option>
     </select>
-    <div class="insert-actions">
-      <label class="auto-job-toggle" for="auto-job-submit">
-        <input id="auto-job-submit" type="checkbox">
-        <span>自动插单</span>
-      </label>
-      <button
-        id="manual-job-insert-button"
-        class="secondary-button toolbar-action-button"
-        type="button"
-        disabled
-      >
-        手动插单
-      </button>
-    </div>
     <label class="reoptimizer-picker" for="reoptimizer-select">
       重调度方式
     </label>
@@ -93,66 +78,319 @@
     <button id="reoptimize-button" class="secondary-button" type="button" disabled>
       执行重调度
     </button>
+    <button id="pause-button" class="secondary-button pause-button" type="button" disabled>
+      暂停仿真
+    </button>
+    <button id="stop-button" class="secondary-button danger-button" type="button" disabled>
+      停止仿真
+    </button>
     <button id="start-button" type="button">启动仿真</button>
   </section>
 
   <main class="dashboard">
+    <aside class="panel job-panel">
+      <div class="panel-heading">
+        <div>
+          <span class="eyebrow">ORDER / JOB STATUS</span>
+          <h2>订单与作业</h2>
+        </div>
+        <span id="order-count" class="count-badge">0 单</span>
+      </div>
+      <div class="job-controls">
+        <label class="auto-job-toggle" for="auto-job-submit">
+          <input id="auto-job-submit" type="checkbox">
+          <span>自动插单</span>
+        </label>
+        <button
+          id="manual-job-insert-button"
+          class="secondary-button toolbar-action-button"
+          type="button"
+          disabled
+        >
+          手动插单
+        </button>
+        <button
+          id="cancel-jobs-button"
+          class="secondary-button danger-button"
+          type="button"
+          disabled
+        >
+          取消订单
+        </button>
+      </div>
+      <details id="order-list-panel" class="order-list-panel" open>
+        <summary class="order-list-heading">
+          <span>订单列表</span>
+          <small>按提交仿真时刻命名</small>
+        </summary>
+        <div id="order-list" class="order-list">
+          <div class="empty-state">等待订单</div>
+        </div>
+      </details>
+      <details id="job-list-panel" class="job-list-panel" open>
+        <summary class="job-list-heading">
+          <span>作业明细</span>
+          <span id="job-count" class="subsection-count">0</span>
+        </summary>
+        <div id="job-list" class="job-list">
+          <div class="empty-state">等待仿真启动</div>
+        </div>
+      </details>
+    </aside>
+
     <section class="panel schedule-panel">
       <div class="panel-heading schedule-heading">
-        <div>
-          <span class="eyebrow">MACHINE TIMELINE</span>
-          <h2>工序调度动画</h2>
+        <div class="view-tabs" role="tablist" aria-label="中央视图">
+          <button
+            id="schedule-tab"
+            class="view-tab active"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="schedule-view"
+          >
+            工序调度
+          </button>
+          <button
+            id="machine-board-tab"
+            class="view-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="machine-board-view"
+          >
+            设备状态看板
+          </button>
         </div>
         <div id="clock-readout" class="clock-readout">T+0000</div>
       </div>
 
-      <div class="timeline-shell">
-        <div class="timeline-axis-row">
-          <div class="machine-label-spacer">设备</div>
-          <div class="time-axis-wrap">
-            <div id="time-axis" class="time-axis"></div>
+      <div
+        id="schedule-view"
+        class="schedule-view"
+        role="tabpanel"
+        aria-labelledby="schedule-tab"
+      >
+        <div class="timeline-shell">
+          <div class="timeline-axis-row">
+            <div class="machine-label-spacer">设备</div>
+            <div class="time-axis-wrap">
+              <div id="time-axis" class="time-axis"></div>
+            </div>
+            <div class="pending-axis-header">待加工队列</div>
           </div>
-          <div class="pending-axis-header">待加工队列</div>
+          <div class="timeline-viewport">
+            <div class="timeline-playhead-layer">
+              <div id="playhead" class="playhead"></div>
+            </div>
+            <div
+              id="timeline-body"
+              class="timeline-body"
+              tabindex="0"
+              aria-label="机器工序时间轴，可上下滚动查看全部机器"
+            >
+              <div id="machine-lanes" class="machine-lanes"></div>
+            </div>
+          </div>
         </div>
-        <div class="timeline-viewport">
-          <div class="timeline-playhead-layer">
-            <div id="playhead" class="playhead"></div>
-          </div>
-          <div
-            id="timeline-body"
-            class="timeline-body"
-            tabindex="0"
-            aria-label="机器工序时间轴，可上下滚动查看全部机器"
-          >
-            <div id="machine-lanes" class="machine-lanes"></div>
-          </div>
+
+        <div class="legend">
+          <span><i class="legend-dot pending"></i>待加工队列</span>
+          <span><i class="legend-dot running"></i>加工中</span>
+          <span><i class="legend-dot completed"></i>已完成</span>
+          <span><i class="legend-dot transport"></i>机器间运输</span>
+          <span class="legend-note">同色代表同一工件 · 中心为当前时刻 · 纵向滚动查看全部机器</span>
         </div>
       </div>
 
-      <div class="legend">
-        <span><i class="legend-dot pending"></i>待加工队列</span>
-        <span><i class="legend-dot running"></i>加工中</span>
-        <span><i class="legend-dot completed"></i>已完成</span>
-        <span><i class="legend-dot transport"></i>机器间运输</span>
-        <span class="legend-note">同色代表同一工件 · 中心为当前时刻 · 纵向滚动查看全部机器</span>
+      <div
+        id="machine-board-view"
+        class="machine-board-view hidden"
+        role="tabpanel"
+        aria-labelledby="machine-board-tab"
+      >
+        <div class="machine-board-summary">
+          <span>异常检测数据</span>
+          <span id="machine-board-summary">等待仿真启动</span>
+        </div>
+        <div id="machine-card-grid" class="machine-card-grid">
+          <div class="empty-state">等待仿真启动</div>
+        </div>
       </div>
     </section>
 
     <aside class="panel event-panel">
       <div class="panel-heading">
         <div>
-          <span class="eyebrow">EVENT BUS</span>
-          <h2>事件列表</h2>
+          <span class="eyebrow">ANOMALY MONITOR</span>
+          <h2>异常列表</h2>
         </div>
-        <span id="event-count" class="count-badge">0</span>
+        <span id="anomaly-count" class="count-badge">0</span>
       </div>
-      <div id="event-list" class="event-list">
-        <div class="empty-state">等待仿真启动</div>
+      <div class="anomaly-controls">
+        <label class="auto-job-toggle" for="auto-machine-anomaly">
+          <input id="auto-machine-anomaly" type="checkbox">
+          <span>自动插入异常</span>
+        </label>
+        <button
+          id="insert-anomaly-button"
+          class="danger-button"
+          type="button"
+          disabled
+        >
+          插入设备异常
+        </button>
+      </div>
+      <div id="anomaly-list" class="event-list anomaly-list">
+        <div class="empty-state">暂无异常事件</div>
       </div>
     </aside>
   </main>
 
+  <dialog
+    id="anomaly-dialog"
+    class="cancel-dialog anomaly-dialog"
+    aria-labelledby="anomaly-dialog-title"
+  >
+    <div class="dialog-heading">
+      <div>
+        <span class="eyebrow">INJECT ANOMALY</span>
+        <h2 id="anomaly-dialog-title">插入设备异常</h2>
+      </div>
+      <button
+        id="anomaly-dialog-close"
+        class="dialog-close-button"
+        type="button"
+        aria-label="关闭"
+      >
+        ×
+      </button>
+    </div>
+    <div class="anomaly-form">
+      <label>
+        <span>设备</span>
+        <select id="anomaly-machine-select"></select>
+      </label>
+      <label>
+        <span>异常类型</span>
+        <select id="anomaly-type-select">
+          <option
+            value="short_failure"
+            data-duration="3"
+            data-min="1"
+            data-max="5"
+          >
+            短故障（1–5，默认 3）
+          </option>
+          <option
+            value="medium_failure"
+            data-duration="10"
+            data-min="5"
+            data-max="15"
+          >
+            中等故障（5–15，默认 10）
+          </option>
+          <option
+            value="long_failure"
+            data-duration="30"
+            data-min="15"
+            data-max="45"
+          >
+            长故障（15–45，默认 30）
+          </option>
+          <option
+            value="degraded"
+            data-duration="15"
+            data-min="10"
+            data-max="20"
+          >
+            降额运行（10–20，默认 15）
+          </option>
+        </select>
+      </label>
+      <label>
+        <span>持续时间</span>
+        <input
+          id="anomaly-duration"
+          type="number"
+          min="1"
+          max="5"
+          step="1"
+          value="3"
+        >
+        <small id="anomaly-duration-hint" class="anomaly-duration-hint">
+          可选范围：1–5，默认持续时间：3
+        </small>
+      </label>
+    </div>
+    <div class="dialog-actions">
+      <button
+        id="anomaly-dialog-dismiss"
+        class="secondary-button"
+        type="button"
+      >
+        返回
+      </button>
+      <button
+        id="confirm-anomaly"
+        class="danger-button"
+        type="button"
+      >
+        插入异常
+      </button>
+    </div>
+  </dialog>
+
+  <dialog
+    id="cancel-jobs-dialog"
+    class="cancel-dialog"
+    aria-labelledby="cancel-dialog-title"
+  >
+    <div class="dialog-heading">
+      <div>
+        <span class="eyebrow">CANCEL ORDERS</span>
+        <h2 id="cancel-dialog-title">选择要取消的订单</h2>
+      </div>
+      <button
+        id="cancel-dialog-close"
+        class="dialog-close-button"
+        type="button"
+        aria-label="关闭"
+      >
+        ×
+      </button>
+    </div>
+    <div class="cancel-dialog-toolbar">
+      <label class="cancel-select-all">
+        <input id="cancel-select-all" type="checkbox">
+        <span>全选可取消订单和作业</span>
+      </label>
+      <span id="cancel-selection-count">已选 0 个订单，0 个作业</span>
+    </div>
+    <div id="cancel-order-options" class="cancel-order-options"></div>
+    <div class="cancel-job-options-heading">作业明细</div>
+    <div id="cancel-job-options" class="cancel-job-options"></div>
+    <div class="dialog-actions">
+      <button
+        id="cancel-dialog-dismiss"
+        class="secondary-button"
+        type="button"
+      >
+        返回
+      </button>
+      <button
+        id="confirm-cancel-jobs"
+        class="danger-button"
+        type="button"
+        disabled
+      >
+        确认取消
+      </button>
+    </div>
+  </dialog>
+
   <div id="error-banner" class="error-banner hidden"></div>
+  <script src="/vendor/echarts.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

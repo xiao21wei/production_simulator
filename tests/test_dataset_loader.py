@@ -120,7 +120,15 @@ class MultiObjectiveDatasetTest(unittest.TestCase):
             self.raw_path,
         )
 
-        self.assertEqual(len(sources), 550)
+        dataset_root = Path(config["paths"]["dataset_root"])
+        raw_names = {
+            path.name for path in (dataset_root / "raw").glob("*.fjs")
+        }
+        add_names = {
+            path.name for path in (dataset_root / "add").glob("*.fjs")
+        }
+        self.assertEqual(len(sources), len(raw_names & add_names))
+        self.assertGreater(len(sources), 0)
         default_sources = [
             source for source in sources if source["is_default"]
         ]

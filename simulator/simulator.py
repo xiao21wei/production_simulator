@@ -1,8 +1,13 @@
 from system.job import Job
 from system.machine import Machine
 from system.schedule import PlannedOperation, Schedule
-from system.order import Order
+from system.order import Order, OrderBatch
 from simulator.event import *
+from simulator.anomaly import (
+    DEGRADED_PROCESSING_FACTOR,
+    MachineAnomalyType,
+    validate_machine_anomaly_duration,
+)
 from simulator.clock import SimulationClock
 from simulator.config import DEFAULT_CONFIG_PATH, load_simulator_config
 from simulator.dataset import load_multi_objective_dataset
@@ -16,9 +21,13 @@ from pathlib import Path
 
 EVENT_QUEUE_PRIORITIES = {
     ScheduleEvent: 0,
+    OrderInsertEvent: 1,
+    OrderCancelEvent: 1,
+    MachineAnomalyEvent: 1,
     JobSubmitEvent: 1,
     JobStartEvent: 2,
     TransportFinishEvent: 3,
+    MachineRecoveryEvent: 3,
     OperationStartEvent: 4,
     OperationFinishEvent: 5,
     JobFinishEvent: 6,
@@ -52,6 +61,8 @@ class Simulator:
         self.event_lock = threading.RLock()
         self.resume_event = threading.Event()
         self.resume_event.set()
+        self.stop_event = threading.Event()
+        self.machine_recovery_reoptimizer = None
         self.pending_event_timestamp = None
         self.curr_event_id = -1
         self.curr_time = 0
@@ -63,6 +74,9 @@ class Simulator:
         self.job_queue = []
         self.processing_queue = []
         self.finished_queue = []
+        self.order_batches = []
+        self.canceled_orders = []
+        self.deferred_anomaly_tasks = {}
         self.scheduled_operations = []
         self.completed_operations = set()
 
@@ -153,11 +167,15 @@ class Simulator:
 
     def _wait_until(self, simulation_timestamp):
         """等待到指定仿真时刻，使事件推进速度符合配置倍速。"""
+        if self.stop_event.is_set():
+            return False
         if not self.realtime:
             self.clock.wait_until(simulation_timestamp)
-            return True
+            return not self.stop_event.is_set()
 
         while self.clock.current_simulation_time < simulation_timestamp:
+            if self.stop_event.is_set():
+                return False
             chunk_end = min(
                 simulation_timestamp,
                 self.clock.current_simulation_time
@@ -177,6 +195,12 @@ class Simulator:
 
     def resume(self):
         self.clock.resume()
+
+    def stop(self):
+        """Stop event processing and unblock the simulation runner."""
+        self.stop_event.set()
+        self.clock.resume()
+        self.clock.stop()
 
     def init(self, file_path=None, additional_file_path=None):
         """读取多目标优化数据，初始化工件、任务和机器。"""
@@ -219,6 +243,14 @@ class Simulator:
         # 初始化调度对象
         self.schedule = Schedule(0, machine_count, items, start, end)
 
+        # 初始数据源中的所有 Job 属于同一个初始订单。
+        self.order_batches = []
+        self.registerOrderBatch(
+            [job.job_id for job in self.jobs],
+            0.0,
+            source="initial",
+        )
+
         # 初始化时为所有 Job 创建 Order，等待初始 ScheduleEvent 调度
         self.job_queue = [
             Order(job.job_id, job.priority, job.ready_time)
@@ -226,10 +258,77 @@ class Simulator:
         ]
         self.processing_queue = []
         self.finished_queue = []
+        self.canceled_orders = []
+        self.deferred_anomaly_tasks = {}
 
         # 初始 ScheduleEvent 从 job_queue 获取作业，生成完整机器队列
         self.handleScheduleEvent(ScheduleEvent(self.newEventId(), 0))
 
+    @staticmethod
+    def _orderTimestampLabel(timestamp):
+        numeric_timestamp = float(timestamp)
+        if numeric_timestamp.is_integer():
+            return str(int(numeric_timestamp))
+        return f"{numeric_timestamp:g}"
+
+    def registerOrderBatch(self, job_ids, submitted_at, source="manual"):
+        """Register one submitted Job batch as a timestamp-named order."""
+        submitted_at = float(submitted_at)
+        existing_ids = {
+            order_batch.order_id for order_batch in self.order_batches
+        }
+        base_id = f"T+{self._orderTimestampLabel(submitted_at)}"
+        order_id = base_id
+        duplicate_index = 2
+        while order_id in existing_ids:
+            order_id = f"{base_id}#{duplicate_index}"
+            duplicate_index += 1
+        order_batch = OrderBatch(
+            order_id,
+            submitted_at,
+            job_ids,
+            source=source,
+        )
+        self.order_batches.append(order_batch)
+        return order_batch
+
+    def orderBatchJobIds(self, order_ids):
+        """Resolve order IDs to their complete, de-duplicated Job sets."""
+        normalized_order_ids = []
+        for order_id in order_ids:
+            normalized_order_id = str(order_id)
+            if normalized_order_id not in normalized_order_ids:
+                normalized_order_ids.append(normalized_order_id)
+        batches_by_id = {
+            order_batch.order_id: order_batch
+            for order_batch in self.order_batches
+        }
+        unknown_order_ids = [
+            order_id
+            for order_id in normalized_order_ids
+            if order_id not in batches_by_id
+        ]
+        if unknown_order_ids:
+            raise ValueError(
+                "Unknown order_ids: " + ", ".join(unknown_order_ids)
+            )
+        job_ids = []
+        for order_id in normalized_order_ids:
+            for job_id in batches_by_id[order_id].job_ids:
+                if job_id not in job_ids:
+                    job_ids.append(job_id)
+        return normalized_order_ids, job_ids
+
+    def _markCanceledOrderBatches(self, order_ids, canceled_at):
+        normalized_ids = set(str(order_id) for order_id in order_ids)
+        for order_batch in self.order_batches:
+            if order_batch.order_id not in normalized_ids:
+                continue
+            if all(
+                self.jobs[job_id].is_canceled
+                for job_id in order_batch.job_ids
+            ):
+                order_batch.canceled_at = float(canceled_at)
 
     def run(self):
         start_time = time.monotonic()
@@ -245,45 +344,24 @@ class Simulator:
             )
 
         try:
-            while len(self.event_queue) > 0:
-                with self.event_lock:
-                    self._discardStaleTransportEvents()
-                    if not self.event_queue:
-                        break
-                    target_timestamp = self.event_queue[0].timestamp
-                    self.pending_event_timestamp = target_timestamp
-
-                if not self._wait_until(target_timestamp):
-                    continue
-
-                with self.event_lock:
-                    self._discardStaleTransportEvents()
-                    if not self.event_queue:
-                        self.pending_event_timestamp = None
-                        break
-                    event = self.event_queue[0]
-                    if event.timestamp != target_timestamp:
-                        continue
-                    if event.timestamp < self.curr_time:
-                        self.event_queue.pop(0)
-                        self.printEvent(event)
-                        print(
-                            "Warning: Event "
-                            f"{event.id} has a timestamp earlier than "
-                            f"the current time ({event.timestamp} < "
-                            f"{self.curr_time}). Skipping."
-                        )
-                        self.pending_event_timestamp = None
-                        continue
-                    self.event_queue.pop(0)
-                    self.curr_time = event.timestamp
-                    self.handleEvent(event)
-                    self.updateEventQueue()
-                    self.pending_event_timestamp = None
+            recovery_attempts = 0
+            while not self.stop_event.is_set():
+                self._drainEventQueue()
+                if self.stop_event.is_set():
+                    break
+                if not self._recoverUnscheduledOperations():
+                    break
+                recovery_attempts += 1
+                if recovery_attempts > 10:
+                    break
         finally:
             self.pending_event_timestamp = None
             self.clock.stop()
 
+        if self.stop_event.is_set():
+            self.calculateObjectives()
+            return False
+        self._validateSimulationCompletion()
         if self.log_tag:
             print(f"\nSimulation finished at time {self.makespan}.")
         elapsed_real_time = time.monotonic() - start_time
@@ -292,6 +370,101 @@ class Simulator:
         self.calculateObjectives()
         self.schedule.printItems(self.schedule_file, self.gantt_file, self.machines)
         self.schedule.testSchedule()
+        return True
+
+    def _drainEventQueue(self):
+        while self.event_queue:
+            with self.event_lock:
+                self._discardStaleTransportEvents()
+                if not self.event_queue:
+                    break
+                target_timestamp = self.event_queue[0].timestamp
+                self.pending_event_timestamp = target_timestamp
+
+            if not self._wait_until(target_timestamp):
+                if self.stop_event.is_set():
+                    self.pending_event_timestamp = None
+                    return
+                continue
+
+            with self.event_lock:
+                self._discardStaleTransportEvents()
+                if not self.event_queue:
+                    self.pending_event_timestamp = None
+                    break
+                event = self.event_queue[0]
+                if event.timestamp != target_timestamp:
+                    continue
+                if event.timestamp < self.curr_time:
+                    self.event_queue.pop(0)
+                    self.printEvent(event)
+                    print(
+                        "Warning: Event "
+                        f"{event.id} has a timestamp earlier than "
+                        f"the current time ({event.timestamp} < "
+                        f"{self.curr_time}). Skipping."
+                    )
+                    self.pending_event_timestamp = None
+                    continue
+                self.event_queue.pop(0)
+                self.curr_time = event.timestamp
+                self.handleEvent(event)
+                self.updateEventQueue()
+                self.pending_event_timestamp = None
+
+    def _recoverUnscheduledOperations(self):
+        unfinished = [
+            task
+            for job in self.jobs
+            if not job.is_canceled
+            for task in job.tasks
+            if task.status in {"pending", "scheduled", "processing"}
+        ]
+        if not unfinished:
+            return False
+        assignments = self._greedyUnfinishedAssignments()
+        has_processing = any(
+            task.status == "processing" for task in unfinished
+        )
+        if not assignments and not has_processing:
+            return False
+        if self.log_tag:
+            print(
+                "Rebuilding unfinished schedule after event queue "
+                f"became empty: {len(unfinished)} operations."
+            )
+        self.reoptimizeUnfinishedOperations(
+            assignments,
+            current_time=max(
+                self.curr_time,
+                self.clock.current_simulation_time,
+            ),
+        )
+        return bool(self.event_queue)
+
+    def _validateSimulationCompletion(self):
+        unfinished = [
+            {
+                "job_id": job.job_id,
+                "operation_id": task.operation_id,
+                "status": task.status,
+                "machine_id": task.assigned_machine,
+            }
+            for job in self.jobs
+            for task in job.tasks
+            if task.status in {"pending", "scheduled", "processing"}
+        ]
+        if not unfinished:
+            return
+        preview = ", ".join(
+            f"{item['job_id']}-{item['operation_id']}"
+            f"({item['status']})"
+            for item in unfinished[:12]
+        )
+        raise RuntimeError(
+            "Simulation event queue is empty but unfinished operations "
+            f"remain: count={len(unfinished)}, operations={preview}."
+        )
 
     def printEvent(self, event):
         print()
@@ -312,6 +485,27 @@ class Simulator:
             print(f"Operation Start: Job ID {event.job_id}, Operation ID {event.operation_id}, Machine ID {event.machine_id}")
         elif isinstance(event, OperationFinishEvent):
             print(f"Operation Finish: Job ID {event.job_id}, Operation ID {event.operation_id}, Machine ID {event.machine_id}")
+        elif isinstance(event, OrderInsertEvent):
+            print(
+                "Order Inserted: "
+                f"Job IDs {event.job_ids or 'pending'}, "
+                f"Seed {event.seed}"
+            )
+        elif isinstance(event, OrderCancelEvent):
+            print(f"Orders Canceled: Job IDs {event.job_ids}")
+        elif isinstance(event, MachineAnomalyEvent):
+            print(
+                "Machine Anomaly: "
+                f"Machine ID {event.machine_id}, "
+                f"Type {event.anomaly_type}, "
+                f"Duration {event.duration}"
+            )
+        elif isinstance(event, MachineRecoveryEvent):
+            print(
+                "Machine Recovery: "
+                f"Machine ID {event.machine_id}, "
+                f"Type {event.anomaly_type}"
+            )
         # elif isinstance(event, OrderAddEvent):
         #     print(f"Order Added: Job ID {event.job_id}, Priority {event.priority}")
         # elif isinstance(event, OrderDeleteEvent):
@@ -325,21 +519,56 @@ class Simulator:
     def addEvent(self, event):
         self.event_queue.append(event)
 
+    def dispatchEventImmediately(self, event):
+        """Process an externally triggered event at the current simulation time."""
+        with self.event_lock:
+            event.timestamp = max(
+                float(event.timestamp),
+                float(self.curr_time),
+            )
+            self.event_queue.append(event)
+            self.updateEventQueue()
+            try:
+                self.event_queue.remove(event)
+                self.curr_time = max(self.curr_time, event.timestamp)
+                return self.handleEvent(event)
+            finally:
+                self.updateEventQueue()
+
     def scheduleTransportFinishEvents(
         self,
         planned_operations,
         after_time=0,
     ):
         for operation in planned_operations:
+            task = self.jobs[operation.job_id].tasks[
+                operation.operation_id
+            ]
+            if task.transport_segments:
+                for segment in task.transport_segments:
+                    if (
+                        segment["completed"]
+                        or segment["transport_time"] <= 0
+                        or segment["transport_end"] is None
+                        or segment["transport_end"] < after_time
+                    ):
+                        continue
+                    self.addEvent(
+                        TransportFinishEvent(
+                            self.newEventId(),
+                            segment["transport_end"],
+                            operation.job_id,
+                            operation.operation_id,
+                            segment["target_machine"],
+                        )
+                    )
+                continue
             if (
                 operation.transport_time <= 0
                 or operation.transport_end is None
                 or operation.transport_end < after_time
             ):
                 continue
-            task = self.jobs[operation.job_id].tasks[
-                operation.operation_id
-            ]
             if task.transport_completed:
                 continue
             self.addEvent(
@@ -359,10 +588,54 @@ class Simulator:
         except (IndexError, TypeError):
             return False
 
+        if task.status not in {"pending", "scheduled", "canceled"}:
+            return False
+        if task.actual_start is not None:
+            return False
+        predecessor_end = None
+        if event.operation_id > 0:
+            predecessor = self.jobs[event.job_id].tasks[
+                event.operation_id - 1
+            ]
+            if (
+                predecessor.status != "completed"
+                or predecessor.actual_end is None
+            ):
+                return False
+            predecessor_end = predecessor.actual_end
+        if task.transport_segments:
+            current_segment = next(
+                (
+                    segment
+                    for segment in task.transport_segments
+                    if (
+                        not segment["completed"]
+                        and segment["target_machine"] == event.machine_id
+                        and segment["transport_end"] is not None
+                        and math.isclose(
+                            float(event.timestamp),
+                            float(segment["transport_end"]),
+                            rel_tol=0,
+                            abs_tol=1e-9,
+                        )
+                    )
+                ),
+                None,
+            )
+            if current_segment is None:
+                return False
+            return (
+                predecessor_end is None
+                or current_segment["transport_start"] is not None
+                and current_segment["transport_start"]
+                >= predecessor_end - 1e-9
+            )
         return (
-            task.status in {"pending", "scheduled"}
-            and task.actual_start is None
-            and not task.transport_completed
+            predecessor_end is None
+            or task.transport_start is not None
+            and task.transport_start >= predecessor_end - 1e-9
+        ) and (
+            not task.transport_completed
             and task.assigned_machine == event.machine_id
             and task.transport_end is not None
             and math.isclose(
@@ -395,6 +668,1078 @@ class Simulator:
     def clearMachineScheduleQueue(self, machine_id):
         self.machines[machine_id].clearPendingOperations()
         self.scheduled_operations[machine_id] = []
+
+    def cancelJob(self, job_id, current_time=None, reschedule=True):
+        """
+        Cancel a Job while preserving any operation already being processed.
+
+        All future operations of the Job are marked canceled and removed from
+        machine queues, plans and pending events. The active operation keeps
+        its finish event so it can complete normally.
+        """
+        if isinstance(job_id, bool):
+            raise ValueError("job_id must be an integer.")
+        try:
+            job_id = int(job_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("job_id must be an integer.") from exc
+        if not 0 <= job_id < len(self.jobs):
+            raise ValueError(f"Unknown job_id: {job_id}")
+
+        job = self.jobs[job_id]
+        if job.is_canceled:
+            return {
+                "success": True,
+                "job_id": job_id,
+                "status": "canceled",
+                "already_canceled": True,
+                "canceled_at": job.canceled_at,
+                "removed_operation_count": 0,
+                "removed_operations": [],
+                "processing_operations": [
+                    self._taskCancellationData(task)
+                    for task in job.tasks
+                    if (
+                        task.status == "processing"
+                        and task.actual_end is None
+                    )
+                ],
+                "canceled_job_ids": [
+                    order.job_id for order in self.canceled_orders
+                ],
+                "greedy_reschedule": {
+                    "applied": False,
+                    "unfinished_task_count": 0,
+                    "moved_operation_count": 0,
+                    "transport_time_added": 0,
+                    "transport_energy_added": 0,
+                },
+            }
+
+        now = max(
+            float(self.curr_time),
+            float(self.clock.current_simulation_time),
+        )
+        if current_time is not None:
+            now = max(now, float(current_time))
+
+        processing_tasks = [
+            task
+            for task in job.tasks
+            if task.status == "processing" and task.actual_end is None
+        ]
+        preserved_operation_keys = {
+            (job_id, task.operation_id) for task in processing_tasks
+        }
+        removed_tasks = [
+            task
+            for task in job.tasks
+            if task.status not in {"processing", "completed"}
+        ]
+        removed_operation_keys = {
+            (job_id, task.operation_id) for task in removed_tasks
+        }
+        transport_started_keys = {
+            (job_id, task.operation_id)
+            for task in removed_tasks
+            if (
+                task.operation_id > 0
+                and (
+                    task.transport_completed
+                    or (
+                        task.transport_start is not None
+                        and task.transport_start <= now + 1e-9
+                    )
+                )
+            )
+        }
+        transport_in_progress_keys = {
+            (job_id, task.operation_id)
+            for task in removed_tasks
+            if (
+                (job_id, task.operation_id) in transport_started_keys
+                and not task.transport_completed
+                and task.transport_end is not None
+                and task.transport_end >= now - 1e-9
+            )
+        }
+        removed_operations = [
+            self._taskCancellationData(task) for task in removed_tasks
+        ]
+
+        order = None
+        for queue in (
+            self.job_queue,
+            self.processing_queue,
+            self.finished_queue,
+        ):
+            for existing_order in list(queue):
+                if existing_order.job_id == job_id:
+                    if order is None:
+                        order = existing_order
+                    queue.remove(existing_order)
+        if order is None:
+            order = Order(job_id, job.priority, job.ready_time)
+        order.status = "canceled"
+        order.canceled_at = now
+        self.canceled_orders.append(order)
+
+        job.canceled_at = now
+        for task in removed_tasks:
+            task.status = "canceled"
+            task.waiting_time = 0
+            operation_key = (job_id, task.operation_id)
+            if operation_key in transport_started_keys:
+                if (
+                    task.transport_end is not None
+                    and task.transport_end <= now + 1e-9
+                ):
+                    task.transport_completed = True
+                    task.current_location_machine = (
+                        task.assigned_machine
+                    )
+                continue
+
+            task.source_machine = None
+            task.transport_start = None
+            task.transport_end = None
+            task.transport_time = 0
+            task.transport_energy = 0
+            task.transport_completed = False
+            task.committed_transport_energy = 0
+            task.transport_segments = []
+            task.current_location_machine = None
+
+        self.planned_operations = [
+            operation
+            for operation in self.planned_operations
+            if (
+                operation.job_id,
+                operation.operation_id,
+            ) not in removed_operation_keys
+        ]
+        for machine_id, machine in enumerate(self.machines):
+            machine.pending_operations = [
+                operation
+                for operation in machine.pending_operations
+                if operation.job_id != job_id
+            ]
+            self.scheduled_operations[machine_id] = [
+                item
+                for item in self.scheduled_operations[machine_id]
+                if item[0] != job_id
+            ]
+
+        def keep_event(event):
+            if isinstance(
+                event,
+                (
+                    JobSubmitEvent,
+                    JobStartEvent,
+                    JobFinishEvent,
+                ),
+            ):
+                return event.job_id != job_id
+            if isinstance(
+                event,
+                (
+                    TransportFinishEvent,
+                    OperationStartEvent,
+                    OperationFinishEvent,
+                ),
+            ):
+                operation_key = (event.job_id, event.operation_id)
+                if operation_key in preserved_operation_keys:
+                    return isinstance(event, OperationFinishEvent)
+                if (
+                    operation_key in transport_in_progress_keys
+                    and isinstance(event, TransportFinishEvent)
+                ):
+                    return True
+                return event.job_id != job_id
+            return True
+
+        self.event_queue = [
+            event for event in self.event_queue if keep_event(event)
+        ]
+
+        for machine_id, machine in enumerate(self.machines):
+            processing = [
+                task
+                for job_item in self.jobs
+                for task in job_item.tasks
+                if (
+                    task.status == "processing"
+                    and task.actual_end is None
+                    and task.assigned_machine == machine_id
+                )
+            ]
+            first_operation = machine.nextPendingOperation()
+            if processing:
+                machine.machine_status = "busy"
+                machine.ready_time = max(
+                    now,
+                    max(self._taskEffectiveEnd(task) for task in processing),
+                    *(
+                        [operation.end_time for operation in machine.pending_operations]
+                        or [now]
+                    ),
+                )
+                continue
+            if first_operation is None:
+                machine.machine_status = "idle"
+                machine.ready_time = now
+                continue
+
+            machine.machine_status = "scheduled"
+            machine.ready_time = max(
+                now,
+                max(
+                    operation.end_time
+                    for operation in machine.pending_operations
+                ),
+            )
+            start_time = max(now, first_operation.start_time)
+            existing_start = next(
+                (
+                    event
+                    for event in self.event_queue
+                    if (
+                        isinstance(event, OperationStartEvent)
+                        and event.job_id == first_operation.job_id
+                        and event.operation_id
+                        == first_operation.operation_id
+                        and event.machine_id == first_operation.machine_id
+                    )
+                ),
+                None,
+            )
+            if existing_start is None:
+                self.addEvent(
+                    OperationStartEvent(
+                        self.newEventId(),
+                        start_time,
+                        first_operation.job_id,
+                        first_operation.operation_id,
+                        first_operation.machine_id,
+                    )
+                )
+            elif existing_start.timestamp < now:
+                existing_start.timestamp = now
+
+        self.updateEventQueue()
+        self.refreshRealtimeObjectives()
+        greedy_reschedule = (
+            self._greedyRescheduleUnfinished(now)
+            if reschedule
+            else {
+                "applied": False,
+                "unfinished_task_count": 0,
+                "moved_operation_count": 0,
+                "transport_time_added": 0,
+                "transport_energy_added": 0,
+            }
+        )
+        processing_operations = [
+            self._taskCancellationData(task)
+            for task in processing_tasks
+        ]
+        result = {
+            "success": True,
+            "job_id": job_id,
+            "status": "canceled",
+            "already_canceled": False,
+            "canceled_at": now,
+            "removed_operation_count": len(removed_operations),
+            "removed_operations": removed_operations,
+            "processing_operations": processing_operations,
+            "canceled_job_ids": [
+                canceled.job_id for canceled in self.canceled_orders
+            ],
+            "greedy_reschedule": greedy_reschedule,
+        }
+        if self.log_tag:
+            print(
+                f"Canceled job {job_id} at time {now}; "
+                f"removed {len(removed_operations)} operations, "
+                f"preserved {len(processing_operations)} processing operations."
+            )
+        return result
+
+    def cancelJobs(self, job_ids, current_time=None):
+        """Cancel multiple Jobs under one prevalidated batch operation."""
+        if not isinstance(job_ids, (list, tuple)):
+            raise ValueError("job_ids must be a list of integers.")
+        if not job_ids:
+            raise ValueError("job_ids must not be empty.")
+
+        normalized_ids = []
+        for job_id in job_ids:
+            if isinstance(job_id, bool):
+                raise ValueError("job_ids must contain only integers.")
+            try:
+                normalized_id = int(job_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "job_ids must contain only integers."
+                ) from exc
+            if not 0 <= normalized_id < len(self.jobs):
+                raise ValueError(f"Unknown job_id: {normalized_id}")
+            normalized_ids.append(normalized_id)
+        if len(set(normalized_ids)) != len(normalized_ids):
+            raise ValueError("job_ids must not contain duplicates.")
+
+        now = max(
+            float(self.curr_time),
+            float(self.clock.current_simulation_time),
+        )
+        if current_time is not None:
+            now = max(now, float(current_time))
+
+        already_canceled_ids = [
+            job_id
+            for job_id in normalized_ids
+            if self.jobs[job_id].is_canceled
+        ]
+        results = [
+            self.cancelJob(
+                job_id,
+                current_time=now,
+                reschedule=False,
+            )
+            for job_id in normalized_ids
+            if job_id not in already_canceled_ids
+        ]
+        removed_operations = [
+            operation
+            for result in results
+            for operation in result["removed_operations"]
+        ]
+        processing_operations = [
+            operation
+            for result in results
+            for operation in result["processing_operations"]
+        ]
+        newly_canceled_ids = [
+            result["job_id"] for result in results
+        ]
+        greedy_reschedule = (
+            self._greedyRescheduleUnfinished(now)
+            if results
+            else {
+                "applied": False,
+                "unfinished_task_count": 0,
+                "moved_operation_count": 0,
+                "transport_time_added": 0,
+                "transport_energy_added": 0,
+            }
+        )
+        return {
+            "success": True,
+            "job_ids": normalized_ids,
+            "newly_canceled_job_ids": newly_canceled_ids,
+            "already_canceled_job_ids": already_canceled_ids,
+            "removed_operation_count": len(removed_operations),
+            "removed_operations": removed_operations,
+            "processing_operations": processing_operations,
+            "canceled_job_ids": [
+                order.job_id for order in self.canceled_orders
+            ],
+            "greedy_reschedule": greedy_reschedule,
+        }
+
+    @staticmethod
+    def _taskCancellationData(task):
+        return {
+            "task_id": task.task_id,
+            "job_id": task.job_id,
+            "operation_id": task.operation_id,
+            "status": task.status,
+            "machine_id": task.assigned_machine,
+            "planned_start": task.planned_start,
+            "planned_end": task.planned_end,
+            "actual_start": task.actual_start,
+            "actual_end": task.actual_end,
+            "source_machine": task.source_machine,
+            "transport_start": task.transport_start,
+            "transport_end": task.transport_end,
+            "transport_time": task.transport_time,
+            "transport_energy": task.transport_energy,
+            "transport_completed": task.transport_completed,
+            "transport_segments": [
+                dict(segment) for segment in task.transport_segments
+            ],
+            "committed_transport_energy": (
+                task.committed_transport_energy
+            ),
+        }
+
+    def startMachineAnomaly(
+        self,
+        machine_id,
+        anomaly_type,
+        duration,
+        current_time=None,
+    ):
+        """Apply a machine anomaly and prepare the affected operations."""
+        anomaly = MachineAnomalyType.normalize(anomaly_type)
+        try:
+            machine_id = int(machine_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("machine_id must be an integer.") from exc
+        if not 0 <= machine_id < len(self.machines):
+            raise ValueError(f"Unknown machine_id: {machine_id}")
+        duration = validate_machine_anomaly_duration(
+            anomaly,
+            duration,
+        )
+
+        now = max(
+            float(self.curr_time),
+            float(self.clock.current_simulation_time),
+        )
+        if current_time is not None:
+            now = max(now, float(current_time))
+        recovery_time = now + duration
+        machine = self.machines[machine_id]
+        if machine.machine_status in {"failed", "repairing"}:
+            raise ValueError(
+                f"Machine {machine_id} already has an active anomaly."
+            )
+        # A machine may receive another anomaly while it is degraded. Remove
+        # the old recovery event so it cannot clear the newer anomaly state.
+        self.event_queue = [
+            event
+            for event in self.event_queue
+            if not (
+                isinstance(event, MachineRecoveryEvent)
+                and event.machine_id == machine_id
+            )
+        ]
+
+        current_tasks = [
+            task
+            for job in self.jobs
+            for task in job.tasks
+            if (
+                task.status == "processing"
+                and task.actual_end is None
+                and task.assigned_machine == machine_id
+            )
+        ]
+        affected = []
+        if anomaly != MachineAnomalyType.DEGRADED:
+            for task in current_tasks:
+                affected.append(self._interruptTask(task, now))
+        else:
+            affected = [
+                {
+                    "task_id": task.task_id,
+                    "job_id": task.job_id,
+                    "operation_id": task.operation_id,
+                    "machine_id": machine_id,
+                    "actual_start": task.actual_start,
+                }
+                for task in current_tasks
+            ]
+
+        if anomaly == MachineAnomalyType.DEGRADED:
+            machine.machine_status = "degraded"
+            machine.anomaly_type = anomaly.value
+            machine.anomaly_started_at = now
+            machine.recovery_time = recovery_time
+            machine.performance_factor = DEGRADED_PROCESSING_FACTOR
+            for task in current_tasks:
+                self._extendDegradedOperation(
+                    task,
+                    machine_id,
+                    recovery_time,
+                )
+        elif anomaly == MachineAnomalyType.LONG_FAILURE:
+            machine.machine_status = "failed"
+            machine.anomaly_type = anomaly.value
+            machine.anomaly_started_at = now
+            machine.recovery_time = recovery_time
+            machine.performance_factor = 1.0
+            self.deferUnavailableTasks(current_time=now)
+        else:
+            machine.machine_status = "repairing"
+            machine.anomaly_type = anomaly.value
+            machine.anomaly_started_at = now
+            machine.recovery_time = recovery_time
+            machine.performance_factor = 1.0
+
+        self._removeMachinePendingEvents(
+            machine_id,
+            remove_starts=(
+                anomaly != MachineAnomalyType.DEGRADED
+            ),
+            # Queued operations may already be in transit to this machine.
+            # Their transport events must survive the downtime; otherwise the
+            # operation can remain scheduled forever without a wake-up event.
+            remove_transports=False,
+        )
+        if anomaly == MachineAnomalyType.DEGRADED:
+            for task in current_tasks:
+                self._ensureDegradedFinishEvent(task, now)
+        elif anomaly in {
+            MachineAnomalyType.SHORT_FAILURE,
+            MachineAnomalyType.MEDIUM_FAILURE,
+        }:
+            for task in current_tasks:
+                target_machine = machine_id
+                if anomaly == MachineAnomalyType.MEDIUM_FAILURE:
+                    candidates = [
+                        candidate
+                        for candidate in task.eligible_machines
+                        if (
+                            candidate != machine_id
+                            and self.machines[candidate].machine_status
+                            not in {"failed", "repairing"}
+                        )
+                    ]
+                    if candidates:
+                        target_machine = min(
+                            candidates,
+                            key=lambda candidate: (
+                                task.processing_times[candidate],
+                                candidate,
+                            ),
+                        )
+                self._requeueInterruptedTask(
+                    task,
+                    machine_id,
+                    target_machine,
+                    now,
+                    recovery_time,
+                )
+
+        self.addEvent(
+            MachineRecoveryEvent(
+                self.newEventId(),
+                recovery_time,
+                machine_id,
+                anomaly.value,
+                anomaly_started_at=now,
+            )
+        )
+        self.updateEventQueue()
+        self.refreshRealtimeObjectives()
+        return {
+            "success": True,
+            "machine_id": machine_id,
+            "anomaly_type": anomaly.value,
+            "machine_status": machine.machine_status,
+            "anomaly_started_at": now,
+            "recovery_time": recovery_time,
+            "processing_time_factor": (
+                DEGRADED_PROCESSING_FACTOR
+                if anomaly == MachineAnomalyType.DEGRADED
+                else 1.0
+            ),
+            "affected_operations": affected,
+            "requires_reoptimization": (
+                anomaly == MachineAnomalyType.LONG_FAILURE
+            ),
+        }
+
+    def deferUnavailableTasks(self, current_time=None):
+        """Defer unfinished tasks that have no currently available machine."""
+        now = max(
+            float(self.curr_time),
+            float(self.clock.current_simulation_time),
+        )
+        if current_time is not None:
+            now = max(now, float(current_time))
+        unavailable = {
+            machine.machine_id
+            for machine in self.machines
+            if machine.machine_status in {"failed", "repairing"}
+        }
+        deferred = []
+        for job in self.jobs:
+            if job.is_canceled:
+                continue
+            for task in job.tasks:
+                key = (job.job_id, task.operation_id)
+                if (
+                    task.status not in {"pending", "scheduled"}
+                    or key in self.deferred_anomaly_tasks
+                ):
+                    continue
+                if any(
+                    candidate not in unavailable
+                    for candidate in task.eligible_machines
+                ):
+                    continue
+                fallback_machine = min(
+                    task.eligible_machines,
+                    key=lambda candidate: (
+                        self.machines[candidate].recovery_time
+                        or float("inf"),
+                        candidate,
+                    ),
+                )
+                recovery_time = (
+                    self.machines[fallback_machine].recovery_time
+                    or now
+                )
+                self.deferred_anomaly_tasks[key] = fallback_machine
+                task.ready_not_before = max(now, recovery_time)
+                deferred.append(key)
+        return deferred
+
+    def _interruptTask(self, task, interrupted_at):
+        assigned_machine = task.assigned_machine
+        interrupted_energy = 0.0
+        if task.actual_start is not None and assigned_machine is not None:
+            processing_time = task.processing_times[assigned_machine]
+            elapsed = min(
+                max(0.0, interrupted_at - task.actual_start),
+                processing_time,
+            )
+            interrupted_energy = (
+                task.processing_energies[assigned_machine]
+                * elapsed
+                / processing_time
+                if processing_time > 0
+                else 0.0
+            )
+        task.interrupted_processing_energy += interrupted_energy
+        self._removeScheduleEntry(task.job_id, task.operation_id)
+        task.status = "scheduled"
+        task.actual_start = None
+        task.actual_end = None
+        task.interrupted_at = interrupted_at
+        task.current_location_machine = assigned_machine
+        self._clearUnstartedSuccessorTransport(
+            task,
+            interrupted_at,
+        )
+        return {
+            "task_id": task.task_id,
+            "job_id": task.job_id,
+            "operation_id": task.operation_id,
+            "machine_id": assigned_machine,
+            "interrupted_at": interrupted_at,
+            "interrupted_processing_energy": interrupted_energy,
+        }
+
+    def _clearUnstartedSuccessorTransport(self, task, interrupted_at):
+        """Discard a successor transport that has not started yet."""
+        job = self.jobs[task.job_id]
+        successor_id = task.operation_id + 1
+        if successor_id >= job.operation_count:
+            return
+        successor = job.tasks[successor_id]
+        if (
+            successor.actual_start is not None
+            or successor.transport_completed
+            or successor.transport_start is None
+            or successor.transport_start <= interrupted_at + 1e-9
+        ):
+            return
+
+        self.event_queue = [
+            event
+            for event in self.event_queue
+            if not (
+                isinstance(event, TransportFinishEvent)
+                and event.job_id == task.job_id
+                and event.operation_id == successor_id
+            )
+        ]
+        successor.source_machine = task.assigned_machine
+        successor.transport_start = None
+        successor.transport_end = None
+        successor.transport_time = 0
+        successor.transport_energy = 0
+        successor.transport_completed = False
+        successor.transport_segments = []
+        successor.current_location_machine = task.assigned_machine
+
+        planned = next(
+            (
+                operation
+                for operation in self.planned_operations
+                if (
+                    operation.job_id == task.job_id
+                    and operation.operation_id == successor_id
+                )
+            ),
+            None,
+        )
+        if planned is not None:
+            planned.source_machine = task.assigned_machine
+            planned.transport_start = None
+            planned.transport_end = None
+            planned.transport_time = 0
+            planned.transport_energy = 0
+            planned.transport_segments = []
+
+    def _removeScheduleEntry(self, job_id, operation_id):
+        key = (job_id, operation_id)
+        for machine_id, items in enumerate(self.schedule.schedule_items):
+            while key in items:
+                index = items.index(key)
+                items.pop(index)
+                self.schedule.start_time[machine_id].pop(index)
+                self.schedule.end_time[machine_id].pop(index)
+
+    def _removeMachinePendingEvents(
+        self,
+        machine_id,
+        remove_starts=True,
+        remove_transports=True,
+        remove_finishes=True,
+    ):
+        self.event_queue = [
+            event
+            for event in self.event_queue
+            if not (
+                remove_finishes
+                and
+                isinstance(event, OperationFinishEvent)
+                and event.machine_id == machine_id
+            )
+            and not (
+                remove_transports
+                and isinstance(event, TransportFinishEvent)
+                and event.machine_id == machine_id
+            )
+            and not (
+                remove_starts
+                and isinstance(event, OperationStartEvent)
+                and event.machine_id == machine_id
+            )
+        ]
+
+    @staticmethod
+    def _taskProcessingEnergy(task):
+        completed = (
+            task.processing_energy
+            if (
+                task.actual_end is not None
+                and task.assigned_machine is not None
+            )
+            else 0
+        )
+        return completed + task.interrupted_processing_energy
+
+    def _extendDegradedOperation(
+        self,
+        task,
+        machine_id,
+        recovery_time,
+    ):
+        processing_time = math.floor(
+            task.processing_times[machine_id]
+            * DEGRADED_PROCESSING_FACTOR
+        )
+        finish_time = task.actual_start + processing_time
+        task.planned_end = finish_time
+        planned = next(
+            (
+                operation
+                for operation in self.planned_operations
+                if (
+                    operation.job_id == task.job_id
+                    and operation.operation_id == task.operation_id
+                )
+            ),
+            None,
+        )
+        if planned is not None:
+            planned.end_time = finish_time
+        self.machines[machine_id].ready_time = max(
+            self.machines[machine_id].ready_time,
+            finish_time,
+        )
+        key = (task.job_id, task.operation_id)
+        for schedule_items, start_times, end_times in zip(
+            self.schedule.schedule_items,
+            self.schedule.start_time,
+            self.schedule.end_time,
+        ):
+            if key in schedule_items:
+                index = schedule_items.index(key)
+                end_times[index] = finish_time
+                break
+
+    def _ensureDegradedFinishEvent(self, task, now):
+        self.event_queue = [
+            event
+            for event in self.event_queue
+            if not (
+                isinstance(event, OperationFinishEvent)
+                and event.job_id == task.job_id
+                and event.operation_id == task.operation_id
+            )
+        ]
+        self.addEvent(
+            OperationFinishEvent(
+                self.newEventId(),
+                max(now, task.planned_end),
+                task.job_id,
+                task.operation_id,
+                task.assigned_machine,
+            )
+        )
+
+    def _requeueInterruptedTask(
+        self,
+        task,
+        original_machine,
+        target_machine,
+        now,
+        recovery_time,
+    ):
+        task.assigned_machine = target_machine
+        task.ready_not_before = recovery_time
+        task.planned_start = max(recovery_time, now)
+        task.planned_end = (
+            task.planned_start + task.processing_times[target_machine]
+        )
+        machine = self.machines[target_machine]
+        planned = next(
+            (
+                operation
+                for operation in self.planned_operations
+                if (
+                    operation.job_id == task.job_id
+                    and operation.operation_id == task.operation_id
+                )
+            ),
+            None,
+        )
+        for machine_item in self.machines:
+            machine_item.pending_operations = [
+                operation
+                for operation in machine_item.pending_operations
+                if not (
+                    operation.job_id == task.job_id
+                    and operation.operation_id == task.operation_id
+                )
+            ]
+        if planned is None:
+            planned = PlannedOperation(
+                job_id=task.job_id,
+                operation_id=task.operation_id,
+                machine_id=target_machine,
+                start_time=task.planned_start,
+                end_time=task.planned_end,
+            )
+            self.planned_operations.append(planned)
+        planned.machine_id = target_machine
+        planned.start_time = task.planned_start
+        planned.end_time = task.planned_end
+        planned.status = "scheduled"
+        machine.pending_operations.insert(0, planned)
+        self.scheduled_operations[target_machine].insert(
+            0,
+            [task.job_id, task.operation_id],
+        )
+
+        if target_machine != original_machine:
+            transport_time = self._jobTransportTime(
+                task.job_id,
+                original_machine,
+                target_machine,
+            )
+            transport_energy = self._jobTransportEnergy(
+                task.job_id,
+                original_machine,
+                target_machine,
+            )
+            segment = {
+                "source_machine": original_machine,
+                "target_machine": target_machine,
+                "transport_start": now,
+                "transport_end": now + transport_time,
+                "transport_time": transport_time,
+                "transport_energy": transport_energy,
+                "completed": transport_time == 0,
+            }
+            task.transport_segments.append(segment)
+            task.source_machine = original_machine
+            task.transport_start = segment["transport_start"]
+            task.transport_end = segment["transport_end"]
+            task.transport_time = transport_time
+            task.transport_energy = transport_energy
+            task.transport_completed = segment["completed"]
+            task.current_location_machine = (
+                target_machine if segment["completed"] else original_machine
+            )
+            planned.source_machine = original_machine
+            planned.transport_start = segment["transport_start"]
+            planned.transport_end = segment["transport_end"]
+            planned.transport_time = transport_time
+            planned.transport_energy = transport_energy
+            planned.transport_segments = [
+                dict(item) for item in task.transport_segments
+            ]
+            if transport_time > 0:
+                self.addEvent(
+                    TransportFinishEvent(
+                        self.newEventId(),
+                        segment["transport_end"],
+                        task.job_id,
+                        task.operation_id,
+                        target_machine,
+                    )
+                )
+            self._removeMachinePendingEvents(
+                target_machine,
+                remove_starts=True,
+                remove_transports=False,
+                remove_finishes=False,
+            )
+        else:
+            task.current_location_machine = target_machine
+            task.transport_completed = True
+
+    def handleMachineRecoveryEvent(self, event):
+        machine = self.machines[event.machine_id]
+        machine.machine_status = "idle"
+        machine.anomaly_type = None
+        machine.anomaly_started_at = None
+        machine.recovery_time = None
+        machine.performance_factor = 1.0
+        self._enqueueDeferredAnomalyTasks(
+            event.machine_id,
+            event.timestamp,
+        )
+
+        released_tasks = [
+            task
+            for job in self.jobs
+            for task in job.tasks
+            if (
+                task.status == "scheduled"
+                and task.ready_not_before is not None
+                and task.ready_not_before <= event.timestamp + 1e-9
+            )
+        ]
+        for task in released_tasks:
+            task.ready_not_before = None
+        for machine_id in {
+            task.assigned_machine
+            for task in released_tasks
+            if task.assigned_machine is not None
+        } | {event.machine_id}:
+            self._startReadyOperationIfPossible(
+                machine_id,
+                event.timestamp,
+            )
+        if any(
+            task.status == "processing"
+            and task.actual_end is None
+            and task.assigned_machine == event.machine_id
+            for job in self.jobs
+            for task in job.tasks
+        ):
+            machine.machine_status = "busy"
+        elif machine.pending_operations:
+            machine.machine_status = "scheduled"
+        else:
+            machine.machine_status = "idle"
+        recovery_reoptimization = None
+        if (
+            event.anomaly_type
+            == MachineAnomalyType.LONG_FAILURE.value
+            and self.machine_recovery_reoptimizer is not None
+        ):
+            recovery_reoptimization = self.machine_recovery_reoptimizer(
+                event.machine_id,
+                event.timestamp,
+            )
+        self.refreshRealtimeObjectives()
+        recovery_reschedule_method = None
+        if (
+            event.anomaly_type
+            == MachineAnomalyType.LONG_FAILURE.value
+            and recovery_reoptimization is not None
+        ):
+            recovery_reschedule_method = (
+                recovery_reoptimization.get("reschedule_method")
+                if isinstance(recovery_reoptimization, dict)
+                else None
+            )
+        event.machine_status = machine.machine_status
+        event.result = {
+            "success": True,
+            "machine_id": event.machine_id,
+            "machine_status": machine.machine_status,
+            "anomaly_type": event.anomaly_type,
+            "recovered_at": event.timestamp,
+            "reschedule_method": recovery_reschedule_method,
+            "reoptimization": recovery_reoptimization,
+        }
+        return True
+
+    def _enqueueDeferredAnomalyTasks(self, machine_id, recovery_time):
+        deferred_keys = [
+            key
+            for key, target_machine in self.deferred_anomaly_tasks.items()
+            if target_machine == machine_id
+        ]
+        if not deferred_keys:
+            return
+        machine = self.machines[machine_id]
+        for key in deferred_keys:
+            job_id, operation_id = key
+            task = self.jobs[job_id].tasks[operation_id]
+            task.status = "scheduled"
+            task.assigned_machine = machine_id
+            task.ready_not_before = recovery_time
+            task.planned_start = recovery_time
+            task.planned_end = (
+                recovery_time + task.processing_times[machine_id]
+            )
+            task.current_location_machine = machine_id
+            planned = next(
+                (
+                    operation
+                    for operation in self.planned_operations
+                    if (
+                        operation.job_id == job_id
+                        and operation.operation_id == operation_id
+                    )
+                ),
+                None,
+            )
+            if planned is None:
+                planned = PlannedOperation(
+                    job_id=job_id,
+                    operation_id=operation_id,
+                    machine_id=machine_id,
+                    start_time=task.planned_start,
+                    end_time=task.planned_end,
+                )
+                self.planned_operations.append(planned)
+            else:
+                planned.machine_id = machine_id
+                planned.start_time = task.planned_start
+                planned.end_time = task.planned_end
+                planned.status = "scheduled"
+            self.assignTaskPlan(task, planned)
+            machine.pending_operations.append(planned)
+            self.scheduled_operations[machine_id].append(
+                [job_id, operation_id]
+            )
+            del self.deferred_anomaly_tasks[key]
+        machine.pending_operations.sort(
+            key=lambda operation: (
+                operation.start_time,
+                -self.jobs[operation.job_id].priority,
+                operation.job_id,
+                operation.operation_id,
+            )
+        )
+        self.scheduled_operations[machine_id] = [
+            [operation.job_id, operation.operation_id]
+            for operation in machine.pending_operations
+        ]
 
     def replanRemainingOperations(self):
         """取消未完成工序事件，并从当前时刻重建全部剩余机器队列。"""
@@ -442,6 +1787,8 @@ class Simulator:
         operation_queue = []
 
         for job in self.jobs:
+            if job.is_canceled:
+                continue
             for task in job.tasks:
                 if (job.job_id, task.operation_id) not in self.completed_operations:
                     task.status = "pending"
@@ -457,10 +1804,13 @@ class Simulator:
                     task.transport_energy = 0
                     task.transport_completed = False
                     task.committed_transport_energy = 0
+                    task.transport_segments = []
                     task.current_location_machine = None
                     task.waiting_time = 0
 
         for job in self.jobs:
+            if job.is_canceled:
+                continue
             next_operation_id = 0
             while (
                 job.job_id,
@@ -628,10 +1978,8 @@ class Simulator:
 
         for job in self.jobs:
             job.processing_energy = sum(
-                task.processing_energy
+                self._taskProcessingEnergy(task)
                 for task in job.tasks
-                if task.actual_end is not None
-                and task.assigned_machine is not None
             )
             job.transport_energy = sum(
                 task.total_transport_energy
@@ -643,7 +1991,10 @@ class Simulator:
                 for task in job.tasks
                 if task.actual_end is not None
             ]
-            all_completed = len(completed_times) == job.operation_count
+            all_completed = (
+                len(completed_times) == job.operation_count
+                and not job.is_canceled
+            )
             job.completion_time = (
                 max(completed_times) if all_completed else None
             )
@@ -689,10 +2040,74 @@ class Simulator:
         }
         return self.objectives
 
+    def _greedyUnfinishedAssignments(self, excluded_machines=None):
+        """Assign each unfinished operation to its fastest available machine."""
+        unavailable_machines = {
+            machine.machine_id
+            for machine in self.machines
+            if machine.machine_status in {"failed", "repairing"}
+        }
+        unavailable_machines.update(
+            int(machine_id)
+            for machine_id in (excluded_machines or [])
+        )
+        assignments = {}
+        for job in self.jobs:
+            if job.is_canceled:
+                continue
+            for task in job.tasks:
+                key = (job.job_id, task.operation_id)
+                if (
+                    task.status not in {"pending", "scheduled"}
+                    or key in self.deferred_anomaly_tasks
+                ):
+                    continue
+                candidates = [
+                    machine_id
+                    for machine_id in task.eligible_machines
+                    if machine_id not in unavailable_machines
+                ]
+                if not candidates:
+                    continue
+                assignments[key] = min(
+                    candidates,
+                    key=lambda machine_id: (
+                        task.processing_times[machine_id],
+                        machine_id,
+                    ),
+                )
+        return assignments
+
+    def _greedyRescheduleUnfinished(self, current_time):
+        """Rebuild unfinished work with the built-in greedy assignment."""
+        assignments = self._greedyUnfinishedAssignments()
+        if not assignments:
+            self.refreshRealtimeObjectives()
+            return {
+                "applied": False,
+                "unfinished_task_count": 0,
+                "moved_operation_count": 0,
+                "transport_time_added": 0,
+                "transport_energy_added": 0,
+            }
+
+        result = self.reoptimizeUnfinishedOperations(
+            assignments,
+            current_time=current_time,
+        )
+        return {
+            "applied": True,
+            "unfinished_task_count": result["unfinished_task_count"],
+            "moved_operation_count": result["moved_operation_count"],
+            "transport_time_added": result["transport_time_added"],
+            "transport_energy_added": result["transport_energy_added"],
+        }
+
     def reoptimizeUnfinishedOperations(
         self,
         machine_assignments,
         current_time=None,
+        excluded_machines=None,
     ):
         """
         使用外部模型给出的机器分配重建未加工工序队列。
@@ -702,10 +2117,44 @@ class Simulator:
         已到达新目标机器的运输不会重复生成。
         """
         now = self.curr_time if current_time is None else float(current_time)
-        assignments = {
-            tuple(key): int(machine_id)
-            for key, machine_id in machine_assignments.items()
+        assignments = {}
+        for key, machine_id in machine_assignments.items():
+            key = tuple(key)
+            if key in self.deferred_anomaly_tasks:
+                continue
+            task = self.jobs[key[0]].tasks[key[1]]
+            if task.status not in {"pending", "scheduled"}:
+                continue
+            assignments[key] = int(machine_id)
+        unavailable_machines = {
+            machine.machine_id
+            for machine in self.machines
+            if machine.machine_status in {"failed", "repairing"}
         }
+        unavailable_machines.update(
+            int(machine_id)
+            for machine_id in (excluded_machines or [])
+        )
+        for key, machine_id in list(assignments.items()):
+            task = self.jobs[key[0]].tasks[key[1]]
+            if machine_id not in unavailable_machines:
+                continue
+            candidates = [
+                candidate
+                for candidate in task.eligible_machines
+                if candidate not in unavailable_machines
+            ]
+            if not candidates:
+                raise ValueError(
+                    f"No available machine for task {task.task_id}."
+                )
+            assignments[key] = min(
+                candidates,
+                key=lambda candidate: (
+                    task.processing_times[candidate],
+                    candidate,
+                ),
+            )
         old_machines = {
             (job.job_id, task.operation_id): task.assigned_machine
             for job in self.jobs
@@ -723,6 +2172,10 @@ class Simulator:
                 "transport_end": task.transport_end,
                 "transport_time": task.transport_time,
                 "transport_energy": task.transport_energy,
+                "transport_segments": [
+                    dict(segment)
+                    for segment in task.transport_segments
+                ],
                 "committed_transport_energy": (
                     task.committed_transport_energy
                 ),
@@ -745,8 +2198,11 @@ class Simulator:
         unfinished_tasks = [
             (job.job_id, task)
             for job in self.jobs
+            if not job.is_canceled
             for task in job.tasks
             if task.status in {"pending", "scheduled"}
+            and (job.job_id, task.operation_id)
+            not in self.deferred_anomaly_tasks
         ]
         missing_assignments = [
             (job_id, task.operation_id)
@@ -763,9 +2219,15 @@ class Simulator:
             )
 
         for machine_id, machine in enumerate(self.machines):
+            anomaly_status = (
+                machine.machine_status
+                if machine.machine_status
+                in {"failed", "repairing", "degraded"}
+                else None
+            )
             machine.clearPendingOperations()
             machine.ready_time = now
-            machine.machine_status = "idle"
+            machine.machine_status = anomaly_status or "idle"
             self.scheduled_operations[machine_id] = []
 
         for task in processing_tasks:
@@ -775,7 +2237,12 @@ class Simulator:
                 machine.ready_time,
                 expected_end,
             )
-            machine.machine_status = "busy"
+            if machine.machine_status not in {
+                "failed",
+                "repairing",
+                "degraded",
+            }:
+                machine.machine_status = "busy"
 
         obsolete_event_types = (
             OperationStartEvent,
@@ -783,8 +2250,30 @@ class Simulator:
             JobFinishEvent,
             TransportFinishEvent,
         )
+        active_canceled_transport_keys = {
+            (job.job_id, task.operation_id)
+            for job in self.jobs
+            if job.is_canceled
+            for task in job.tasks
+            if (
+                task.status == "canceled"
+                and task.actual_start is None
+                and not task.transport_completed
+                and task.transport_start is not None
+                and task.transport_start <= now + 1e-9
+                and task.transport_end is not None
+                and task.transport_end >= now - 1e-9
+            )
+        }
         kept_events = []
         for event in self.event_queue:
+            if (
+                isinstance(event, TransportFinishEvent)
+                and (event.job_id, event.operation_id)
+                in active_canceled_transport_keys
+            ):
+                kept_events.append(event)
+                continue
             if isinstance(event, obsolete_event_types):
                 continue
             kept_events.append(event)
@@ -820,6 +2309,7 @@ class Simulator:
             task.committed_transport_energy = previous_transport[
                 "committed_transport_energy"
             ]
+            task.transport_segments = []
             task.current_location_machine = previous_transport[
                 "current_location_machine"
             ]
@@ -827,6 +2317,8 @@ class Simulator:
 
         operation_queue = []
         for job in self.jobs:
+            if job.is_canceled:
+                continue
             next_operation_id = 0
             while (
                 next_operation_id < job.operation_count
@@ -839,6 +2331,11 @@ class Simulator:
             ):
                 next_operation_id += 1
             if next_operation_id >= job.operation_count:
+                continue
+            if (
+                job.job_id,
+                next_operation_id,
+            ) in self.deferred_anomaly_tasks:
                 continue
 
             if next_operation_id == 0:
@@ -885,6 +2382,8 @@ class Simulator:
         }
         for job in self.jobs:
             if (
+                not job.is_canceled
+                and
                 all(task.status == "completed" for task in job.tasks)
                 and job.job_id not in finished_job_ids
             ):
@@ -927,7 +2426,67 @@ class Simulator:
             ]
             transport_start = None
             transport_end = None
-            transport_reused = False
+            transport_segments = []
+            added_transport_time = 0
+            added_transport_energy = 0
+            predecessor = (
+                job.tasks[operation_id - 1]
+                if operation_id > 0
+                else None
+            )
+            predecessor_end = (
+                predecessor.actual_end
+                if (
+                    predecessor is not None
+                    and predecessor.actual_end is not None
+                )
+                else self._taskEffectiveEnd(predecessor)
+                if predecessor is not None
+                else None
+            )
+            previous_segments = [
+                dict(segment)
+                for segment in previous_transport[
+                    "transport_segments"
+                ]
+            ]
+            previous_chain = previous_segments
+            if (
+                not previous_chain
+                and previous_transport["transport_start"] is not None
+                and previous_transport["transport_end"] is not None
+            ):
+                previous_chain = [{
+                    "source_machine": previous_transport[
+                        "source_machine"
+                    ],
+                    "target_machine": previous_transport[
+                        "assigned_machine"
+                    ],
+                    "transport_start": previous_transport[
+                        "transport_start"
+                    ],
+                    "transport_end": previous_transport[
+                        "transport_end"
+                    ],
+                    "transport_time": previous_transport[
+                        "transport_time"
+                    ],
+                    "transport_energy": previous_transport[
+                        "transport_energy"
+                    ],
+                    "completed": previous_transport[
+                        "transport_completed"
+                    ],
+                }]
+            previous_transport_valid = (
+                operation_id == 0
+                or self._transportChainMatchesPredecessor(
+                    job_id,
+                    previous_chain,
+                    predecessor,
+                )
+            )
 
             if operation_id == 0:
                 source_machine = None
@@ -937,6 +2496,8 @@ class Simulator:
                 current_location = machine_id
                 transport_completed = True
             elif (
+                previous_transport_valid
+                and
                 previous_transport["transport_completed"]
                 and previous_transport["current_location_machine"]
                 == machine_id
@@ -949,56 +2510,218 @@ class Simulator:
                 if transport_end is not None:
                     release_time = max(release_time, transport_end)
                 current_location = machine_id
-                transport_reused = True
                 transport_completed = True
-            else:
-                if previous_transport["transport_completed"]:
-                    source_machine = previous_transport[
-                        "current_location_machine"
+                transport_segments = [
+                    dict(segment)
+                    for segment in previous_transport[
+                        "transport_segments"
                     ]
-                    task.committed_transport_energy += previous_transport[
+                ]
+            else:
+                previous_segments = (
+                    previous_segments
+                    if previous_transport_valid
+                    else []
+                )
+                active_segment = next(
+                    (
+                        segment
+                        for segment in previous_segments
+                        if not segment["completed"]
+                    ),
+                    None,
+                )
+                legacy_in_progress = (
+                    previous_transport_valid
+                    and
+                    not previous_transport["transport_completed"]
+                    and previous_transport["transport_start"] is not None
+                    and previous_transport["transport_end"] is not None
+                    and previous_transport["transport_start"]
+                    <= now + 1e-9
+                    and previous_transport["transport_end"]
+                    > now + 1e-9
+                )
+                if active_segment is None and legacy_in_progress:
+                    active_segment = {
+                        "source_machine": previous_transport[
+                            "source_machine"
+                        ],
+                        "target_machine": previous_transport[
+                            "assigned_machine"
+                        ],
+                        "transport_start": previous_transport[
+                            "transport_start"
+                        ],
+                        "transport_end": previous_transport[
+                            "transport_end"
+                        ],
+                        "transport_time": previous_transport[
+                            "transport_time"
+                        ],
+                        "transport_energy": previous_transport[
+                            "transport_energy"
+                        ],
+                        "completed": False,
+                    }
+
+                if active_segment is not None:
+                    completed_segments = [
+                        dict(segment)
+                        for segment in previous_segments
+                        if segment["completed"]
+                    ]
+                    current_segment = dict(active_segment)
+                    transport_segments = [
+                        *completed_segments,
+                        current_segment,
+                    ]
+                    source_machine = current_segment[
+                        "source_machine"
+                    ]
+                    inbound_transport = current_segment[
+                        "transport_time"
+                    ]
+                    inbound_energy = current_segment[
                         "transport_energy"
                     ]
-                    transport_available_time = max(now, release_time)
-                else:
-                    source_machine = job.tasks[
-                        operation_id - 1
-                    ].assigned_machine
-                    transport_available_time = max(
-                        now,
-                        release_time,
-                    )
-
-                if (
-                    source_machine is None
-                    or source_machine == machine_id
-                ):
-                    inbound_transport = 0
-                    inbound_energy = 0
-                    release_time = transport_available_time
-                    current_location = machine_id
-                else:
-                    inbound_transport = self._jobTransportTime(
-                        job_id,
-                        source_machine,
-                        machine_id,
-                    )
-                    inbound_energy = self._jobTransportEnergy(
-                        job_id,
-                        source_machine,
-                        machine_id,
-                    )
-                    transport_start = transport_available_time
-                    transport_end = (
-                        transport_start + inbound_transport
-                    )
-                    release_time = transport_end
+                    transport_start = current_segment[
+                        "transport_start"
+                    ]
+                    transport_end = current_segment[
+                        "transport_end"
+                    ]
+                    release_time = max(release_time, transport_end)
                     current_location = source_machine
-                transport_completed = self._inboundTransportCompleted(
-                    job_id,
-                    operation_id,
-                    inbound_transport,
-                )
+
+                    if current_segment["target_machine"] != machine_id:
+                        second_transport_time = self._jobTransportTime(
+                            job_id,
+                            current_segment["target_machine"],
+                            machine_id,
+                        )
+                        second_transport_energy = (
+                            self._jobTransportEnergy(
+                                job_id,
+                                current_segment["target_machine"],
+                                machine_id,
+                            )
+                        )
+                        second_segment = {
+                            "source_machine": current_segment[
+                                "target_machine"
+                            ],
+                            "target_machine": machine_id,
+                            "transport_start": current_segment[
+                                "transport_end"
+                            ],
+                            "transport_end": (
+                                current_segment["transport_end"]
+                                + second_transport_time
+                            ),
+                            "transport_time": second_transport_time,
+                            "transport_energy": second_transport_energy,
+                            "completed": False,
+                        }
+                        transport_segments.append(second_segment)
+                        release_time = second_segment["transport_end"]
+                        added_transport_time = second_transport_time
+                        added_transport_energy = second_transport_energy
+                    transport_completed = False
+                else:
+                    if (
+                        previous_transport_valid
+                        and previous_transport["transport_completed"]
+                    ):
+                        source_machine = previous_transport[
+                            "current_location_machine"
+                        ]
+                        if previous_segments:
+                            transport_segments = previous_segments
+                        else:
+                            task.committed_transport_energy += (
+                                previous_transport[
+                                    "transport_energy"
+                                ]
+                            )
+                    else:
+                        source_machine = predecessor.assigned_machine
+
+                    transport_available_time = (
+                        max(now, release_time)
+                        if (
+                            previous_transport_valid
+                            and previous_transport[
+                                "transport_completed"
+                            ]
+                        )
+                        else (
+                            predecessor_end
+                            if predecessor_end is not None
+                            else max(now, release_time)
+                        )
+                    )
+                    if (
+                        source_machine is None
+                        or source_machine == machine_id
+                    ):
+                        inbound_transport = 0
+                        inbound_energy = 0
+                        release_time = transport_available_time
+                        current_location = machine_id
+                        transport_completed = (
+                            self._inboundTransportCompleted(
+                                job_id,
+                                operation_id,
+                                0,
+                            )
+                        )
+                    else:
+                        inbound_transport = self._jobTransportTime(
+                            job_id,
+                            source_machine,
+                            machine_id,
+                        )
+                        inbound_energy = self._jobTransportEnergy(
+                            job_id,
+                            source_machine,
+                            machine_id,
+                        )
+                        transport_start = transport_available_time
+                        transport_end = (
+                            transport_start + inbound_transport
+                        )
+                        release_time = transport_end
+                        current_location = source_machine
+                        transport_segment = {
+                            "source_machine": source_machine,
+                            "target_machine": machine_id,
+                            "transport_start": transport_start,
+                            "transport_end": transport_end,
+                            "transport_time": inbound_transport,
+                            "transport_energy": inbound_energy,
+                            "completed": False,
+                        }
+                        if transport_end <= now + 1e-9:
+                            transport_segment["completed"] = True
+                            transport_completed = True
+                            current_location = machine_id
+                            release_time = transport_end
+                        else:
+                            release_time = transport_end
+                            current_location = source_machine
+                            transport_completed = (
+                                self._inboundTransportCompleted(
+                                    job_id,
+                                    operation_id,
+                                    inbound_transport,
+                                )
+                            )
+                        transport_segments.append(
+                            transport_segment
+                        )
+                        added_transport_time = inbound_transport
+                        added_transport_energy = inbound_energy
 
             start_time = max(release_time, machine.ready_time)
             end_time = start_time + task.processing_times[machine_id]
@@ -1008,6 +2731,10 @@ class Simulator:
                 machine_id=machine_id,
                 start_time=start_time,
                 end_time=end_time,
+                transport_segments=[
+                    dict(segment)
+                    for segment in transport_segments
+                ],
             )
 
             task.status = "scheduled"
@@ -1020,6 +2747,9 @@ class Simulator:
             task.transport_start = transport_start
             task.transport_end = transport_end
             task.transport_completed = transport_completed
+            task.transport_segments = [
+                dict(segment) for segment in transport_segments
+            ]
             if task.transport_completed:
                 current_location = machine_id
             task.current_location_machine = current_location
@@ -1030,9 +2760,8 @@ class Simulator:
                 [job_id, operation_id]
             )
             self.planned_operations.append(planned)
-            if not transport_reused:
-                transport_time_added += inbound_transport
-                transport_energy_added += inbound_energy
+            transport_time_added += added_transport_time
+            transport_energy_added += added_transport_energy
 
             if old_machines[(job_id, operation_id)] != machine_id:
                 moved_operations.append(
@@ -1045,8 +2774,14 @@ class Simulator:
                         ],
                         "current_position_machine_id": task.source_machine,
                         "new_machine_id": machine_id,
-                        "transport_time": inbound_transport,
-                        "transport_energy": inbound_energy,
+                        "transport_time": sum(
+                            segment["transport_time"]
+                            for segment in transport_segments
+                        ),
+                        "transport_energy": sum(
+                            segment["transport_energy"]
+                            for segment in transport_segments
+                        ),
                         "transport_start": task.transport_start,
                         "transport_end": task.transport_end,
                         "start_time": start_time,
@@ -1054,7 +2789,16 @@ class Simulator:
                     }
                 )
 
-            if operation_id + 1 < job.operation_count:
+            if (
+                operation_id + 1 < job.operation_count
+                and (
+                    job_id,
+                    operation_id + 1,
+                ) not in self.deferred_anomaly_tasks
+                and job.tasks[operation_id + 1].status
+                in {"pending", "scheduled"}
+                and (job_id, operation_id + 1) in assignments
+            ):
                 next_operation_id = operation_id + 1
                 next_machine_id = assignments[
                     (job_id, next_operation_id)
@@ -1135,7 +2879,12 @@ class Simulator:
             "transport_energy_added": transport_energy_added,
         }
 
-    def submitRandomJobsAndReoptimize(self, current_time=None, seed=0):
+    def submitRandomJobsAndReoptimize(
+        self,
+        current_time=None,
+        seed=0,
+        order_source="manual",
+    ):
         """
         Add a batch of generated Jobs and reschedule all unfinished work.
 
@@ -1161,18 +2910,12 @@ class Simulator:
             )
             new_jobs.append(job)
 
-        assignments = {
-            (existing_job.job_id, task.operation_id): min(
-                task.eligible_machines,
-                key=lambda machine_id: (
-                    task.processing_times[machine_id],
-                    machine_id,
-                ),
-            )
-            for existing_job in self.jobs
-            for task in existing_job.tasks
-            if task.status in {"pending", "scheduled"}
-        }
+        order_batch = self.registerOrderBatch(
+            [job.job_id for job in new_jobs],
+            now,
+            source=order_source,
+        )
+        assignments = self._greedyUnfinishedAssignments()
         reoptimization = self.reoptimizeUnfinishedOperations(
             assignments,
             current_time=now,
@@ -1212,6 +2955,9 @@ class Simulator:
                     "transport_energy": job.transport_energy_matrix,
                 } for job in new_jobs],
                 "submitted_job_count": len(new_jobs),
+                "order_id": order_batch.order_id,
+                "order_source": order_batch.source,
+                "order_job_ids": list(order_batch.job_ids),
                 "initial_job_count": self.initial_job_count,
                 "queued_job_count": len(queued_orders),
                 "processing_queue_size": len(self.processing_queue),
@@ -1284,10 +3030,17 @@ class Simulator:
         if task.actual_end is not None:
             return task.actual_end
         if task.actual_start is not None and task.assigned_machine is not None:
-            return (
+            nominal_end = (
                 task.actual_start
                 + task.processing_times[task.assigned_machine]
             )
+            if task.planned_end is None:
+                return nominal_end
+            # Machine degradation can extend an active operation without
+            # changing its nominal processing time. Reoptimization must keep
+            # the extended finish, otherwise it recreates a finish event in
+            # the past and the operation can remain processing forever.
+            return max(nominal_end, task.planned_end)
         return task.planned_end
 
     @staticmethod
@@ -1303,7 +3056,11 @@ class Simulator:
             transport_end=task.transport_end,
             transport_time=task.transport_time,
             transport_energy=task.transport_energy,
+            transport_segments=[
+                dict(segment) for segment in task.transport_segments
+            ],
             waiting_time=task.waiting_time,
+            status=task.status,
         )
 
     def updateEventQueue(self):
@@ -1328,6 +3085,12 @@ class Simulator:
         """处理事件"""
         if isinstance(event, ScheduleEvent):
             self.handleScheduleEvent(event)
+        elif isinstance(event, OrderInsertEvent):
+            return self.handleOrderInsertEvent(event)
+        elif isinstance(event, OrderCancelEvent):
+            return self.handleOrderCancelEvent(event)
+        elif isinstance(event, MachineAnomalyEvent):
+            return self.handleMachineAnomalyEvent(event)
         elif isinstance(event, JobSubmitEvent):
             self.handleJobSubmitEvent(event)
         elif isinstance(event, JobStartEvent):
@@ -1337,11 +3100,76 @@ class Simulator:
         elif isinstance(event, TransportFinishEvent):
             self.handleTransportFinishEvent(event)
         elif isinstance(event, OperationStartEvent):
-            self.handleOperationStartEvent(event)
+            return self.handleOperationStartEvent(event)
         elif isinstance(event, OperationFinishEvent):
             self.handleOperationFinishEvent(event)
+        elif isinstance(event, MachineRecoveryEvent):
+            self.handleMachineRecoveryEvent(event)
         else:
             print(f"Error: Unknown event type {type(event)} with ID {event.id}.")
+            return False
+        return True
+
+    def handleOrderInsertEvent(self, event):
+        if self.log_tag:
+            print(
+                f"Inserting orders at time {event.timestamp} "
+                f"with seed {event.seed}."
+            )
+        result = self.submitRandomJobsAndReoptimize(
+            current_time=event.timestamp,
+            seed=event.seed,
+            order_source=event.order_source,
+        )
+        event.order_id = result.get("order_id")
+        event.job_ids = [
+            job["job_id"] for job in result.get("new_jobs", [])
+        ]
+        event.job_count = len(event.job_ids)
+        event.result = result
+        return True
+
+    def handleOrderCancelEvent(self, event):
+        if self.log_tag:
+            print(
+                f"Canceling orders {event.job_ids} "
+                f"at time {event.timestamp}."
+            )
+        if event.batch:
+            result = self.cancelJobs(
+                event.job_ids,
+                current_time=event.timestamp,
+            )
+        else:
+            result = self.cancelJob(
+                event.job_ids[0],
+                current_time=event.timestamp,
+            )
+        if event.order_ids:
+            self._markCanceledOrderBatches(
+                event.order_ids,
+                event.timestamp,
+            )
+            result["order_ids"] = list(event.order_ids)
+        event.result = result
+        return True
+
+    def handleMachineAnomalyEvent(self, event):
+        if self.log_tag:
+            print(
+                "Applying machine anomaly "
+                f"{event.anomaly_type} to machine {event.machine_id} "
+                f"at time {event.timestamp}."
+            )
+        result = self.startMachineAnomaly(
+            event.machine_id,
+            event.anomaly_type,
+            event.duration,
+            current_time=event.timestamp,
+        )
+        event.machine_status = result["machine_status"]
+        event.result = result
+        return True
 
     def handleScheduleEvent(self, event):
         """调度当前 job_queue 中的作业，并生成完整机器队列。"""
@@ -1393,6 +3221,7 @@ class Simulator:
                 task.transport_energy = 0
                 task.transport_completed = False
                 task.committed_transport_energy = 0
+                task.transport_segments = []
                 task.current_location_machine = None
                 task.waiting_time = 0
 
@@ -1459,12 +3288,36 @@ class Simulator:
                 )
 
             end_time = start_time + processing_time
+            transport_segments = []
+            if (
+                operation_id > 0
+                and inbound_transport > 0
+                and transport_start is not None
+                and transport_end is not None
+            ):
+                transport_segments.append(
+                    {
+                        "source_machine": job.tasks[
+                            operation_id - 1
+                        ].assigned_machine,
+                        "target_machine": machine_id,
+                        "transport_start": transport_start,
+                        "transport_end": transport_end,
+                        "transport_time": inbound_transport,
+                        "transport_energy": inbound_energy,
+                        "completed": False,
+                    }
+                )
             planned_operation = PlannedOperation(
                 job_id=job_id,
                 operation_id=operation_id,
                 machine_id=machine_id,
                 start_time=start_time,
                 end_time=end_time,
+                transport_segments=[
+                    dict(segment)
+                    for segment in transport_segments
+                ],
             )
             machine.enqueueOperation(planned_operation)
             machine.ready_time = end_time
@@ -1482,6 +3335,9 @@ class Simulator:
             task.transport_energy = inbound_energy
             task.transport_start = transport_start
             task.transport_end = transport_end
+            task.transport_segments = [
+                dict(segment) for segment in transport_segments
+            ]
             task.transport_completed = self._inboundTransportCompleted(
                 job_id,
                 operation_id,
@@ -1545,6 +3401,8 @@ class Simulator:
     def handleJobSubmitEvent(self, event):
         if self.log_tag:
             print(f"Job {event.job_id} submitted at time {event.timestamp} with priority {event.priority}")
+        if self.jobs[event.job_id].is_canceled:
+            return
         self.job_queue.append(Order(event.job_id, event.priority, event.timestamp))
         self.scheduleJobs()
 
@@ -1560,6 +3418,8 @@ class Simulator:
     def handleJobStartEvent(self, event):
         if self.log_tag:
             print(f"Job {event.job_id} started at time {event.timestamp}")
+        if self.jobs[event.job_id].is_canceled:
+            return
         self.scheduleOperation(event.job_id, 0, event.timestamp)
 
     def handleJobFinishEvent(self, event):
@@ -1581,15 +3441,152 @@ class Simulator:
                     "Ignoring stale transport event "
                     f"{event.id} at time {event.timestamp}."
                 )
-            return
+            return False
         task = self.jobs[event.job_id].tasks[event.operation_id]
-        task.transport_completed = True
-        task.current_location_machine = event.machine_id
+        if task.transport_segments:
+            completed_segment = next(
+                segment
+                for segment in task.transport_segments
+                if (
+                    not segment["completed"]
+                    and segment["target_machine"] == event.machine_id
+                    and math.isclose(
+                        float(event.timestamp),
+                        float(segment["transport_end"]),
+                        rel_tol=0,
+                        abs_tol=1e-9,
+                    )
+                )
+            )
+            completed_segment["completed"] = True
+            task.current_location_machine = event.machine_id
+            remaining_segments = [
+                segment
+                for segment in task.transport_segments
+                if not segment["completed"]
+            ]
+            if remaining_segments:
+                next_segment = remaining_segments[0]
+                task.source_machine = next_segment["source_machine"]
+                task.transport_start = next_segment["transport_start"]
+                task.transport_end = next_segment["transport_end"]
+                task.transport_time = next_segment["transport_time"]
+                task.transport_energy = next_segment[
+                    "transport_energy"
+                ]
+                task.transport_completed = False
+            else:
+                task.transport_completed = True
+        else:
+            task.transport_completed = True
+            task.current_location_machine = event.machine_id
+        self._startReadyOperationIfPossible(
+            event.machine_id,
+            event.timestamp,
+        )
         self.refreshRealtimeObjectives()
+        return True
+
+    def _startReadyOperationIfPossible(self, machine_id, current_time):
+        """Schedule the first queued operation now if all constraints are met."""
+        machine = self.machines[machine_id]
+        if machine.machine_status in {"failed", "repairing"}:
+            return False
+        if any(
+            task.status == "processing" and task.actual_end is None
+            for job in self.jobs
+            for task in job.tasks
+            if task.assigned_machine == machine_id
+        ):
+            return False
+
+        operation = machine.nextPendingOperation()
+        if operation is None:
+            return False
+        job = self.jobs[operation.job_id]
+        task = job.tasks[operation.operation_id]
+        if (
+            job.is_canceled
+            or task.status not in {"pending", "scheduled"}
+            or task.actual_start is not None
+            or not task.transport_completed
+            or (
+                task.ready_not_before is not None
+                and current_time + 1e-9 < task.ready_not_before
+            )
+        ):
+            return False
+
+        if task.operation_id == 0:
+            if current_time + 1e-9 < job.ready_time:
+                return False
+        else:
+            predecessor = job.tasks[task.operation_id - 1]
+            if (
+                predecessor.status != "completed"
+                or predecessor.actual_end is None
+                or current_time + 1e-9 < predecessor.actual_end
+            ):
+                return False
+
+        start_time = current_time
+        end_time = (
+            start_time + task.processing_times[operation.machine_id]
+        )
+        operation.start_time = start_time
+        operation.end_time = end_time
+        operation.status = "scheduled"
+        task.planned_start = start_time
+        task.planned_end = end_time
+        task.waiting_time = max(
+            0,
+            start_time
+            - (
+                task.transport_end
+                if task.transport_end is not None
+                else (
+                    predecessor.actual_end
+                    if task.operation_id > 0
+                    else job.ready_time
+                )
+            ),
+        )
+        machine.ready_time = end_time
+
+        self.event_queue = [
+            queued_event
+            for queued_event in self.event_queue
+            if not (
+                isinstance(queued_event, OperationStartEvent)
+                and queued_event.job_id == task.job_id
+                and queued_event.operation_id == task.operation_id
+                and queued_event.machine_id == operation.machine_id
+            )
+        ]
+        self.addEvent(
+            OperationStartEvent(
+                self.newEventId(),
+                start_time,
+                task.job_id,
+                task.operation_id,
+                operation.machine_id,
+            )
+        )
+        return True
     
     def scheduleOperation(self, job_id, operation_id, timestamp):
         if self.log_tag:
             print(f"Operation {job_id}-{operation_id} scheduled at time {timestamp}")
+        if (
+            (job_id, operation_id)
+            in self.deferred_anomaly_tasks
+        ):
+            return
+        if (
+            self.jobs[job_id].is_canceled
+            or self.jobs[job_id].tasks[operation_id].status == "canceled"
+        ):
+            return
         machine_id = self.placeOperation(job_id, operation_id)
         if machine_id == -1:
             raise RuntimeError(
@@ -1724,11 +3721,82 @@ class Simulator:
             and predecessor.actual_end is not None
         )
 
+    def _transportChainMatchesPredecessor(
+        self,
+        job_id,
+        segments,
+        predecessor,
+    ):
+        """Check that an existing transport chain is still causally valid."""
+        if not segments:
+            return False
+        predecessor_end = (
+            predecessor.actual_end
+            if predecessor.actual_end is not None
+            else self._taskEffectiveEnd(predecessor)
+        )
+        if (
+            predecessor_end is None
+            or predecessor.assigned_machine is None
+            or segments[0]["source_machine"]
+            != predecessor.assigned_machine
+            or segments[0]["transport_start"]
+            < predecessor_end - 1e-9
+        ):
+            return False
+
+        time_matrix = (
+            self.jobs[job_id].transport_time_matrix
+            or self.transport_time
+        )
+        for index, segment in enumerate(segments):
+            source = segment["source_machine"]
+            target = segment["target_machine"]
+            expected_time = time_matrix[source][target]
+            if not math.isclose(
+                segment["transport_time"],
+                expected_time,
+                rel_tol=0,
+                abs_tol=1e-9,
+            ):
+                return False
+            if not math.isclose(
+                segment["transport_end"] - segment["transport_start"],
+                expected_time,
+                rel_tol=0,
+                abs_tol=1e-9,
+            ):
+                return False
+            if index > 0:
+                previous = segments[index - 1]
+                if (
+                    source != previous["target_machine"]
+                    or not math.isclose(
+                        segment["transport_start"],
+                        previous["transport_end"],
+                        rel_tol=0,
+                        abs_tol=1e-9,
+                    )
+                ):
+                    return False
+        return True
+
     def assignTaskPlan(self, task, planned_operation):
         """Copy machine, transport and timing details to task and plan."""
         if task.transport_start is not None:
             arrival_time = task.transport_end
+        elif task.operation_id > 0:
+            predecessor = self.jobs[task.job_id].tasks[
+                task.operation_id - 1
+            ]
+            arrival_time = (
+                predecessor.actual_end
+                if predecessor.actual_end is not None
+                else predecessor.planned_end
+            )
         else:
+            arrival_time = self.jobs[task.job_id].ready_time
+        if arrival_time is None:
             arrival_time = self.jobs[task.job_id].ready_time
 
         task.waiting_time = max(0, task.planned_start - arrival_time)
@@ -1737,13 +3805,22 @@ class Simulator:
         planned_operation.transport_end = task.transport_end
         planned_operation.transport_time = task.transport_time
         planned_operation.transport_energy = task.transport_energy
+        planned_operation.transport_segments = [
+            dict(segment) for segment in task.transport_segments
+        ]
         planned_operation.waiting_time = task.waiting_time
+        planned_operation.status = task.status
 
     def placeOperation(self, job_id, operation_id):
         job = self.jobs[job_id]
         minMachineId = -1
         minTime = float('inf')  # 初始化为无穷大
         for machine_id in range(len(self.machines)):
+            if self.machines[machine_id].machine_status in {
+                "failed",
+                "repairing",
+            }:
+                continue
             if job.operation_times[operation_id][machine_id] < minTime:
                 minTime = job.operation_times[operation_id][machine_id]
                 minMachineId = machine_id
@@ -1774,35 +3851,117 @@ class Simulator:
     def handleOperationStartEvent(self, event):
         if self.log_tag:
             print(f"Operation {event.job_id}-{event.operation_id} started on machine {event.machine_id} at time {event.timestamp}")
+        job = self.jobs[event.job_id]
+        task = job.tasks[event.operation_id]
+        if job.is_canceled or task.status == "canceled":
+            return False
+        if (
+            task.status == "processing"
+            or task.actual_start is not None
+            or task.actual_end is not None
+        ):
+            return False
+        machine = self.machines[event.machine_id]
+        if any(
+            other.status == "processing"
+            and other.actual_end is None
+            and other.assigned_machine == event.machine_id
+            for job_item in self.jobs
+            for other in job_item.tasks
+        ):
+            return False
+        if (
+            machine.machine_status in {"failed", "repairing"}
+            or (
+                task.ready_not_before is not None
+                and event.timestamp + 1e-9 < task.ready_not_before
+            )
+        ):
+            return False
+        if event.operation_id > 0:
+            predecessor = job.tasks[event.operation_id - 1]
+            if (
+                predecessor.status != "completed"
+                or predecessor.actual_end is None
+                or event.timestamp + 1e-9 < predecessor.actual_end
+            ):
+                return False
+            if not task.transport_completed:
+                transport_end = (
+                    task.transport_segments[-1]["transport_end"]
+                    if task.transport_segments
+                    else task.transport_end
+                )
+                if (
+                    transport_end is not None
+                    and transport_end > event.timestamp + 1e-9
+                ):
+                    return False
+                task.transport_completed = True
+                for segment in task.transport_segments:
+                    if (
+                        segment["transport_end"]
+                        <= event.timestamp + 1e-9
+                    ):
+                        segment["completed"] = True
+        elif not task.transport_completed:
+            return False
         time1 = event.timestamp
-        time2 = self.jobs[event.job_id].operation_times[event.operation_id][event.machine_id]
+        time2 = job.operation_times[event.operation_id][event.machine_id]
+        if (
+            machine.machine_status == "degraded"
+            and machine.recovery_time is not None
+            and time1 < machine.recovery_time
+        ):
+            time2 = math.floor(
+                time2 * DEGRADED_PROCESSING_FACTOR
+            )
+        next_planned_operation = machine.nextPendingOperation()
+        if (
+            next_planned_operation is None
+            or next_planned_operation.job_id != event.job_id
+            or next_planned_operation.operation_id
+            != event.operation_id
+        ):
+            return False
         finish_time = time1 + time2
-        task = self.jobs[event.job_id].tasks[event.operation_id]
         task.status = "processing"
         task.assigned_machine = event.machine_id
         task.actual_start = time1
+        task.planned_start = time1
+        task.planned_end = finish_time
         task.transport_completed = True
         task.current_location_machine = event.machine_id
-        next_planned_operation = self.machines[
-            event.machine_id
-        ].nextPendingOperation()
-        operation_matches = (
-            next_planned_operation is not None
-            and next_planned_operation.job_id == event.job_id
-            and next_planned_operation.operation_id == event.operation_id
+        planned_operation = next(
+            (
+                operation
+                for operation in self.planned_operations
+                if (
+                    operation.job_id == event.job_id
+                    and operation.operation_id == event.operation_id
+                )
+            ),
+            None,
         )
-        if operation_matches:
-            self.machines[event.machine_id].popNextOperation()
-            if self.scheduled_operations[event.machine_id]:
-                self.scheduled_operations[event.machine_id].pop(0)
-        else:
-            if self.log_tag:
-                print(f"Error: Scheduled operation mismatch for job {event.job_id} operation {event.operation_id} on machine {event.machine_id}.")
-            # print(f"Scheduled operations: {self.scheduled_operations[event.machine_id]}")
+        if planned_operation is not None:
+            planned_operation.start_time = time1
+            planned_operation.end_time = finish_time
+            planned_operation.status = "processing"
+        self._alignSuccessorTransportToActualFinish(
+            event.job_id,
+            event.operation_id,
+            finish_time,
+        )
+        for segment in task.transport_segments:
+            segment["completed"] = True
+        machine.popNextOperation()
+        if self.scheduled_operations[event.machine_id]:
+            self.scheduled_operations[event.machine_id].pop(0)
         operationFinishEvent = OperationFinishEvent(self.newEventId(), finish_time, event.job_id, event.operation_id, event.machine_id)
         self.addEvent(operationFinishEvent)
         self.machines[event.machine_id].addOperation(finish_time)
         self.schedule.addOperation(event.job_id, event.operation_id, event.machine_id, time1, finish_time)
+        return True
 
     def handleOperationFinishEvent(self, event):
         if self.log_tag:
@@ -1815,12 +3974,51 @@ class Simulator:
         task.assigned_machine = event.machine_id
         task.actual_end = event.timestamp
         task.current_location_machine = event.machine_id
+        planned_operation = next(
+            (
+                operation
+                for operation in self.planned_operations
+                if (
+                    operation.job_id == event.job_id
+                    and operation.operation_id == event.operation_id
+                )
+            ),
+            None,
+        )
+        if planned_operation is not None:
+            planned_operation.status = "completed"
+        self._alignSuccessorTransportToActualFinish(
+            event.job_id,
+            event.operation_id,
+            event.timestamp,
+        )
+        if event.operation_id + 1 < self.jobs[
+            event.job_id
+        ].operation_count:
+            successor = self.jobs[event.job_id].tasks[
+                event.operation_id + 1
+            ]
+            if (
+                successor.status == "scheduled"
+                and successor.transport_completed
+                and successor.assigned_machine is not None
+            ):
+                self._startReadyOperationIfPossible(
+                    successor.assigned_machine,
+                    event.timestamp,
+                )
         scheduled_count = len(self.scheduled_operations[event.machine_id])
         self.machines[event.machine_id].finishOperation(event.timestamp, scheduled_count)
 
-        next_planned_operation = self.machines[
-            event.machine_id
-        ].nextPendingOperation()
+        if not self._startReadyOperationIfPossible(
+            event.machine_id,
+            event.timestamp,
+        ):
+            next_planned_operation = self.machines[
+                event.machine_id
+            ].nextPendingOperation()
+        else:
+            next_planned_operation = None
         if next_planned_operation is not None:
             start_time = max(
                 event.timestamp,
@@ -1836,6 +4034,8 @@ class Simulator:
                 )
             )
         elif (
+            not self.jobs[event.job_id].is_canceled
+            and
             event.operation_id < self.jobs[event.job_id].operation_count - 1
             and not self.isOperationPlanned(
                 event.job_id,
@@ -1848,8 +4048,179 @@ class Simulator:
                 event.timestamp,
             )
 
-        if event.operation_id == self.jobs[event.job_id].operation_count - 1:
-            self.jobs[event.job_id].completion_time = event.timestamp
+        job = self.jobs[event.job_id]
+        if (
+            not job.is_canceled
+            and event.operation_id == job.operation_count - 1
+        ):
+            job.completion_time = event.timestamp
             jobFinishedEvent = JobFinishEvent(self.newEventId(), event.timestamp, event.job_id)
             self.addEvent(jobFinishedEvent)
         self.refreshRealtimeObjectives()
+
+    def _alignSuccessorTransportToActualFinish(
+        self,
+        job_id,
+        operation_id,
+        finish_time,
+    ):
+        """Move a not-started successor transport to actual completion time."""
+        job = self.jobs[job_id]
+        successor_id = operation_id + 1
+        if successor_id >= job.operation_count:
+            return
+        successor = job.tasks[successor_id]
+        if (
+            successor.status not in {"pending", "scheduled"}
+            or successor.actual_start is not None
+            or successor.transport_completed
+        ):
+            return
+        if (
+            successor.transport_start is not None
+            and successor.transport_start <= self.curr_time + 1e-9
+            and successor.transport_end is not None
+            and successor.transport_end > self.curr_time + 1e-9
+        ):
+            # An already started transport must finish before it can be
+            # rerouted. Only future transport legs may be moved here.
+            return
+
+        source_machine = job.tasks[operation_id].assigned_machine
+        target_machine = successor.assigned_machine
+        if source_machine is None or target_machine is None:
+            return
+
+        segments = [
+            dict(segment)
+            for segment in successor.transport_segments
+        ]
+        if (
+            not segments
+            or segments[0]["source_machine"] != source_machine
+            or segments[-1]["target_machine"] != target_machine
+        ):
+            segments = []
+            if source_machine != target_machine:
+                segments = [{
+                    "source_machine": source_machine,
+                    "target_machine": target_machine,
+                    "transport_start": finish_time,
+                    "transport_end": (
+                        finish_time
+                        + self._jobTransportTime(
+                            job_id,
+                            source_machine,
+                            target_machine,
+                        )
+                    ),
+                    "transport_time": self._jobTransportTime(
+                        job_id,
+                        source_machine,
+                        target_machine,
+                    ),
+                    "transport_energy": self._jobTransportEnergy(
+                        job_id,
+                        source_machine,
+                        target_machine,
+                    ),
+                    "completed": False,
+                }]
+        else:
+            cursor = finish_time
+            for segment in segments:
+                source = segment["source_machine"]
+                target = segment["target_machine"]
+                transport_time = self._jobTransportTime(
+                    job_id,
+                    source,
+                    target,
+                )
+                segment["transport_start"] = cursor
+                segment["transport_end"] = cursor + transport_time
+                segment["transport_time"] = transport_time
+                segment["transport_energy"] = (
+                    self._jobTransportEnergy(
+                        job_id,
+                        source,
+                        target,
+                    )
+                )
+                segment["completed"] = False
+                cursor = segment["transport_end"]
+
+        successor.transport_segments = segments
+        if segments:
+            first_segment = segments[0]
+            last_segment = segments[-1]
+            successor.source_machine = first_segment[
+                "source_machine"
+            ]
+            successor.transport_start = first_segment[
+                "transport_start"
+            ]
+            successor.transport_end = first_segment["transport_end"]
+            successor.transport_time = first_segment["transport_time"]
+            successor.transport_energy = first_segment[
+                "transport_energy"
+            ]
+            successor.transport_completed = False
+            successor.current_location_machine = source_machine
+            arrival_time = last_segment["transport_end"]
+        else:
+            successor.source_machine = source_machine
+            successor.transport_start = None
+            successor.transport_end = None
+            successor.transport_time = 0
+            successor.transport_energy = 0
+            successor.transport_completed = True
+            successor.current_location_machine = target_machine
+            arrival_time = finish_time
+        successor.waiting_time = max(
+            0,
+            successor.planned_start - arrival_time,
+        )
+
+        planned = next(
+            (
+                operation
+                for operation in self.planned_operations
+                if (
+                    operation.job_id == job_id
+                    and operation.operation_id == successor_id
+                )
+            ),
+            None,
+        )
+        if planned is not None:
+            planned.source_machine = successor.source_machine
+            planned.transport_start = successor.transport_start
+            planned.transport_end = successor.transport_end
+            planned.transport_time = successor.transport_time
+            planned.transport_energy = successor.transport_energy
+            planned.transport_segments = [
+                dict(segment) for segment in segments
+            ]
+            planned.waiting_time = successor.waiting_time
+
+        self.event_queue = [
+            queued_event
+            for queued_event in self.event_queue
+            if not (
+                isinstance(queued_event, TransportFinishEvent)
+                and queued_event.job_id == job_id
+                and queued_event.operation_id == successor_id
+            )
+        ]
+        for segment in segments:
+            if segment["transport_time"] <= 0:
+                continue
+            self.addEvent(
+                TransportFinishEvent(
+                    self.newEventId(),
+                    segment["transport_end"],
+                    job_id,
+                    successor_id,
+                    segment["target_machine"],
+                )
+            )

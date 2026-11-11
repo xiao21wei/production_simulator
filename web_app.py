@@ -1,6 +1,7 @@
 import argparse
 import json
 import mimetypes
+import random
 import socket
 import tempfile
 import threading
@@ -11,7 +12,18 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from simulator.config import DEFAULT_CONFIG_PATH, load_simulator_config
+from simulator.anomaly import (
+    MACHINE_ANOMALY_DEFAULT_DURATIONS,
+    MACHINE_ANOMALY_DURATION_RANGES,
+    MachineAnomalyType,
+)
+from simulator.detection_data import MachineDetectionDataProvider
 from simulator.dataset import list_dataset_sources
+from simulator.event import (
+    MachineAnomalyEvent,
+    OrderCancelEvent,
+    OrderInsertEvent,
+)
 from simulator.run_log import SimulationRunLogger
 from simulator.simulator import Simulator
 
@@ -19,6 +31,8 @@ from simulator.simulator import Simulator
 PROJECT_ROOT = Path(__file__).resolve().parent
 WEB_ROOT = PROJECT_ROOT / "web"
 HLS_TEST_ROOT = PROJECT_ROOT / "HLS_test"
+AUTO_MACHINE_ANOMALY_INTERVAL = 40
+MACHINE_ANOMALY_DRL_NUM_SAMPLES = 1
 HLS_OPTION_FIELDS = (
     "total_time_seconds",
     "search_mode",
@@ -39,8 +53,17 @@ REOPTIMIZATION_COMMAND_CONFIG_FIELDS = {
 }
 EVENT_FIELDS = (
     "job_id",
+    "job_ids",
+    "order_id",
+    "order_ids",
+    "order_source",
+    "job_count",
     "operation_id",
     "machine_id",
+    "anomaly_type",
+    "anomaly_started_at",
+    "duration",
+    "machine_status",
 )
 
 
@@ -66,8 +89,106 @@ def serialize_plan(planned_operations):
     return [asdict(operation) for operation in planned_operations]
 
 
+def serialize_job_states(simulator):
+    job_states = []
+    for job in simulator.jobs:
+        all_completed = all(
+            task.status == "completed" for task in job.tasks
+        )
+        if job.is_canceled:
+            status = "canceled"
+        elif all_completed:
+            status = "completed"
+        else:
+            status = "processing"
+
+        processing_tasks = [
+            task
+            for task in job.tasks
+            if task.status == "processing" and task.actual_end is None
+        ]
+        completed_count = sum(
+            task.status == "completed" for task in job.tasks
+        )
+        job_states.append(
+            {
+                "job_id": job.job_id,
+                "status": status,
+                "operation_count": job.operation_count,
+                "completed_operations": completed_count,
+                "current_operations": [
+                    {
+                        "operation_id": task.operation_id,
+                        "machine_id": task.assigned_machine,
+                    }
+                    for task in processing_tasks
+                ],
+                "canceled_at": job.canceled_at,
+                "completion_time": job.completion_time,
+                "priority": job.priority,
+            }
+        )
+    return sorted(job_states, key=lambda item: item["job_id"])
+
+
+def serialize_order_batches(simulator, job_states):
+    """Serialize submitted Job batches as timestamp-named orders."""
+    states_by_job_id = {
+        state["job_id"]: state for state in job_states
+    }
+    order_batches = []
+    for order_batch in getattr(simulator, "order_batches", []):
+        batch_job_states = [
+            states_by_job_id[job_id]
+            for job_id in order_batch.job_ids
+            if job_id in states_by_job_id
+        ]
+        status_counts = {
+            status: sum(
+                state["status"] == status
+                for state in batch_job_states
+            )
+            for status in ("processing", "completed", "canceled")
+        }
+        if (
+            batch_job_states
+            and status_counts["canceled"] == len(batch_job_states)
+        ):
+            status = "canceled"
+        elif (
+            batch_job_states
+            and status_counts["completed"] == len(batch_job_states)
+        ):
+            status = "completed"
+        elif status_counts["processing"] > 0:
+            status = "processing"
+        else:
+            status = "mixed"
+        canceled_times = [
+            state["canceled_at"]
+            for state in batch_job_states
+            if state["canceled_at"] is not None
+        ]
+        canceled_at = order_batch.canceled_at
+        if canceled_at is None and status == "canceled" and canceled_times:
+            canceled_at = max(canceled_times)
+        order_batches.append(
+            {
+                "order_id": order_batch.order_id,
+                "submitted_at": order_batch.submitted_at,
+                "source": order_batch.source,
+                "job_ids": list(order_batch.job_ids),
+                "job_count": len(order_batch.job_ids),
+                "status": status,
+                "status_counts": status_counts,
+                "canceled_at": canceled_at,
+            }
+        )
+    return order_batches
+
+
 class DashboardState:
-    def __init__(self, display_percent=100):
+    def __init__(self, display_percent=100, speed=5.0):
         self.lock = threading.RLock()
         self.status = "idle"
         self.generation = 0
@@ -75,10 +196,14 @@ class DashboardState:
         self.plan = []
         self.current_time = 0
         self.makespan = 0
-        self.speed = 5.0
+        self.speed = float(speed)
         self.horizon = 100
         self.finished_jobs = 0
         self.total_jobs = 0
+        self.canceled_jobs = 0
+        self.canceled_orders = []
+        self.order_batches = []
+        self.job_states = []
         self.machine_states = []
         self.objectives = {}
         self.selected_dataset = None
@@ -89,6 +214,10 @@ class DashboardState:
         self.auto_job_submission_triggered = False
         self.auto_job_submission_count = 0
         self.auto_job_submission_threshold = None
+        self.auto_machine_anomaly_enabled = False
+        self.auto_machine_anomaly_count = 0
+        self.next_auto_machine_anomaly_time = None
+        self.last_auto_machine_anomaly = None
 
     def prepare(self, speed):
         with self.lock:
@@ -102,6 +231,10 @@ class DashboardState:
             self.horizon = 100
             self.finished_jobs = 0
             self.total_jobs = 0
+            self.canceled_jobs = 0
+            self.canceled_orders = []
+            self.order_batches = []
+            self.job_states = []
             self.machine_states = []
             self.objectives = {}
             self.selected_dataset = None
@@ -110,6 +243,9 @@ class DashboardState:
             self.auto_job_submission_triggered = False
             self.auto_job_submission_count = 0
             self.auto_job_submission_threshold = None
+            self.auto_machine_anomaly_count = 0
+            self.next_auto_machine_anomaly_time = None
+            self.last_auto_machine_anomaly = None
 
     def set_running(self, simulator):
         with self.lock:
@@ -129,6 +265,11 @@ class DashboardState:
     def finish(self, simulator):
         with self.lock:
             self.status = "finished"
+            self._update_simulator(simulator)
+
+    def stop(self, simulator):
+        with self.lock:
+            self.status = "stopped"
             self._update_simulator(simulator)
 
     def fail(self, error):
@@ -164,6 +305,10 @@ class DashboardState:
                 "horizon": self.horizon,
                 "finished_jobs": self.finished_jobs,
                 "total_jobs": self.total_jobs,
+                "canceled_jobs": self.canceled_jobs,
+                "canceled_orders": list(self.canceled_orders),
+                "order_batches": list(self.order_batches),
+                "job_states": list(self.job_states),
                 "machine_states": self.machine_states,
                 "objectives": self.objectives,
                 "selected_dataset": self.selected_dataset,
@@ -174,13 +319,44 @@ class DashboardState:
                     "count": self.auto_job_submission_count,
                     "threshold": self.auto_job_submission_threshold,
                 },
+                "auto_machine_anomaly": {
+                    "enabled": self.auto_machine_anomaly_enabled,
+                    "interval": AUTO_MACHINE_ANOMALY_INTERVAL,
+                    "count": self.auto_machine_anomaly_count,
+                    "next_time": self.next_auto_machine_anomaly_time,
+                    "last": self.last_auto_machine_anomaly,
+                },
             }
 
     def _update_simulator(self, simulator):
         self.current_time = simulator.curr_time
         self.makespan = simulator.makespan
+        serialized_plan = serialize_plan(
+            simulator.planned_operations
+        )
+        if serialized_plan != self.plan:
+            self.plan = serialized_plan
+            self.plan_revision += 1
         self.finished_jobs = len(simulator.finished_queue)
         self.total_jobs = len(simulator.jobs)
+        self.job_states = serialize_job_states(simulator)
+        self.order_batches = serialize_order_batches(
+            simulator,
+            self.job_states,
+        )
+        self.canceled_jobs = sum(
+            state["status"] == "canceled"
+            for state in self.job_states
+        )
+        self.canceled_orders = [
+            {
+                "job_id": order.job_id,
+                "priority": order.priority,
+                "submit_time": order.submit_time,
+                "canceled_at": order.canceled_at,
+            }
+            for order in simulator.canceled_orders
+        ]
         self.horizon = max(
             100,
             int(self.current_time) + 20,
@@ -194,6 +370,10 @@ class DashboardState:
                 "id": machine.machine_id,
                 "status": machine.machine_status,
                 "pending": len(machine.pending_operations),
+                "anomaly_type": machine.anomaly_type,
+                "anomaly_started_at": machine.anomaly_started_at,
+                "recovery_time": machine.recovery_time,
+                "performance_factor": machine.performance_factor,
             }
             for machine in simulator.machines
         ]
@@ -217,7 +397,10 @@ class SimulationManager:
         self.speed = float(speed)
         self.real_time_step = real_time_step
         self.realtime = realtime
-        self.state = DashboardState(display_percent)
+        self.state = DashboardState(
+            display_percent,
+            speed=self.speed,
+        )
         self.simulator = None
         self.selected_source = None
         self.thread = None
@@ -231,6 +414,32 @@ class SimulationManager:
         self.auto_job_submission_enabled = False
         self.auto_job_submission_triggered = False
         self.auto_job_submission_count = 0
+        self.auto_machine_anomaly_enabled = False
+        self.auto_machine_anomaly_count = 0
+        self.next_auto_machine_anomaly_time = None
+        self.last_auto_machine_anomaly = None
+        self._prediction_alarm_generation = None
+        self._prediction_alarm_timestamps = set()
+        detection_config = config.get("detection_data", {})
+        self.detection_data = MachineDetectionDataProvider(
+            base_url=detection_config.get(
+                "base_url",
+                "http://192.168.1.68:8068",
+            ),
+            timeout=detection_config.get("timeout", 10),
+            history_points=detection_config.get(
+                "history_points",
+                60,
+            ),
+            poll_interval_ms=detection_config.get(
+                "poll_interval_ms",
+                1000,
+            ),
+            prediction_interval=detection_config.get(
+                "prediction_interval",
+                5,
+            ),
+        )
         self.run_logger = None
         self.dataset_root = (
             self.config_path.parent / config["paths"]["dataset_root"]
@@ -299,6 +508,99 @@ class SimulationManager:
     def set_display_percent(self, display_percent):
         self.state.set_display_percent(display_percent)
 
+    def _current_event_timestamp(self):
+        return max(
+            self.simulator.curr_time,
+            self.simulator.clock.current_simulation_time,
+            self.simulator.pending_event_timestamp
+            or self.simulator.curr_time,
+        )
+
+    def _dispatch_current_event(self, event):
+        handled = self.simulator.dispatchEventImmediately(event)
+        if handled is False:
+            raise RuntimeError(
+                f"Event {type(event).__name__} was rejected."
+            )
+        return event
+
+    def set_paused(self, paused):
+        if not isinstance(paused, bool):
+            raise ValueError("paused must be a boolean.")
+        with self.mutation_lock:
+            with self.state.lock:
+                if self.simulator is None:
+                    raise ValueError("Simulation has not been started.")
+                if paused:
+                    if self.state.status == "paused":
+                        return {
+                            "success": True,
+                            "paused": True,
+                            "status": self.state.status,
+                        }
+                    if self.state.status != "running":
+                        raise ValueError(
+                            "Simulation must be running to pause."
+                        )
+                    self.simulator.pause()
+                    self.state.status = "paused"
+                else:
+                    if self.state.status == "running":
+                        return {
+                            "success": True,
+                            "paused": False,
+                            "status": self.state.status,
+                        }
+                    if self.state.status != "paused":
+                        raise ValueError(
+                            "Simulation must be paused to resume."
+                        )
+                    self.simulator.resume()
+                    self.state.status = "running"
+                return {
+                    "success": True,
+                    "paused": self.state.status == "paused",
+                    "status": self.state.status,
+                }
+
+    def stop(self):
+        """Stop the active simulation and preserve its partial state."""
+        with self.state.lock:
+            if self.simulator is None:
+                raise ValueError("Simulation has not been started.")
+            if self.state.status in {"idle", "finished", "stopped"}:
+                return {
+                    "success": True,
+                    "status": self.state.status,
+                    "stopped": self.state.status == "stopped",
+                }
+            if self.state.status not in {
+                "running",
+                "paused",
+                "reoptimizing",
+            }:
+                raise ValueError(
+                    "Simulation must be active to stop."
+                )
+            self.state.status = "stopping"
+            self.simulator.stop()
+
+        thread = self.thread
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=5)
+        with self.state.lock:
+            if self.simulator is not None:
+                self.state.stop(self.simulator)
+            return {
+                "success": True,
+                "status": self.state.status,
+                "stopped": True,
+            }
+
     def _run(self):
         try:
             self.run_logger = SimulationRunLogger(self.log_dir)
@@ -333,6 +635,9 @@ class SimulationManager:
                 additional_file_path=self.selected_source["additional_file"],
             )
             self.simulator.event_lock = self.mutation_lock
+            self.simulator.machine_recovery_reoptimizer = (
+                self._reoptimize_after_machine_recovery
+            )
             self.auto_job_submission_triggered = False
             self.auto_job_submission_count = 0
             self.state.auto_job_submission_enabled = (
@@ -343,26 +648,83 @@ class SimulationManager:
             self.state.auto_job_submission_threshold = (
                 self._auto_job_submission_threshold()
             )
+            self.auto_machine_anomaly_count = 0
+            self.last_auto_machine_anomaly = None
+            self.next_auto_machine_anomaly_time = (
+                AUTO_MACHINE_ANOMALY_INTERVAL
+                if self.auto_machine_anomaly_enabled
+                else None
+            )
+            self.state.auto_machine_anomaly_enabled = (
+                self.auto_machine_anomaly_enabled
+            )
+            self.state.auto_machine_anomaly_count = 0
+            self.state.next_auto_machine_anomaly_time = (
+                self.next_auto_machine_anomaly_time
+            )
+            self.state.last_auto_machine_anomaly = None
 
             self.state.set_running(self.simulator)
             original_handle_event = self.simulator.handleEvent
 
             def handle_and_publish(event):
                 with self.mutation_lock:
-                    original_handle_event(event)
+                    handled = original_handle_event(event)
+                    if handled is False:
+                        return
                     self.state.record_event(event, self.simulator)
                     self.run_logger.record_event(event, self.simulator)
                     self._maybe_auto_submit_jobs()
+                    self._maybe_auto_insert_machine_anomaly()
 
             self.simulator.handleEvent = handle_and_publish
-            self.simulator.run()
+            completed = self.simulator.run()
             self.run_logger.finish(self.simulator)
-            self.state.finish(self.simulator)
+            if completed:
+                self.state.finish(self.simulator)
+            else:
+                self.state.stop(self.simulator)
         except Exception as exc:
             traceback.print_exc()
             self.state.fail(exc)
             if self.run_logger is not None:
                 self.run_logger.fail(exc)
+
+    def _request_drl_assignments(
+        self,
+        num_samples=1,
+        seed=0,
+        excluded_machines=None,
+    ):
+        """Return DRL-scheduled machine assignments for unfinished work."""
+        if self.selected_source is None:
+            raise ValueError("No dataset has been selected.")
+        source = self.selected_source
+        scheduler = self._get_scheduler()
+        raw_text = Path(source["raw_file"]).read_text(encoding="utf-8")
+        additional_text = Path(
+            source["additional_file"]
+        ).read_text(encoding="utf-8")
+        model_result = scheduler.predict(
+            {
+                "raw_lines": raw_text,
+                "additional_lines": additional_text,
+                "instance_name": source["id"],
+                "num_samples": int(num_samples),
+                "seed": int(seed),
+            }
+        )
+        assignments = {
+            (row["job_id"], row["operation_index"]): row[
+                "machine_id"
+            ]
+            for row in model_result["schedule"]
+        }
+        assignments = self._completeUnfinishedAssignments(
+            assignments,
+            excluded_machines=excluded_machines,
+        )
+        return model_result, assignments
 
     def reoptimize(self, num_samples=1, seed=0):
         """Use the mofjsp model to reassign all unfinished operations."""
@@ -372,33 +734,15 @@ class SimulationManager:
                     raise ValueError("Simulation has not been started.")
                 if self.state.status != "running":
                     raise ValueError("Simulation must be running to reoptimize.")
-                source = self.selected_source
                 self.state.status = "reoptimizing"
 
             self.simulator.pause()
             try:
-                scheduler = self._get_scheduler()
-                raw_text = Path(source["raw_file"]).read_text(encoding="utf-8")
-                additional_text = Path(
-                    source["additional_file"]
-                ).read_text(encoding="utf-8")
-                model_result = scheduler.predict(
-                    {
-                        "raw_lines": raw_text,
-                        "additional_lines": additional_text,
-                        "instance_name": source["id"],
-                        "num_samples": int(num_samples),
-                        "seed": int(seed),
-                    }
-                )
-                assignments = {
-                    (row["job_id"], row["operation_index"]): row[
-                        "machine_id"
-                    ]
-                    for row in model_result["schedule"]
-                }
-                assignments = self._completeUnfinishedAssignments(
-                    assignments
+                model_result, assignments = (
+                    self._request_drl_assignments(
+                        num_samples=num_samples,
+                        seed=seed,
+                    )
                 )
                 reoptimization = (
                     self.simulator.reoptimizeUnfinishedOperations(
@@ -615,7 +959,7 @@ class SimulationManager:
             "command_config": normalized_config,
         }
 
-    def submit_random_jobs(self, seed=0):
+    def submit_random_jobs(self, seed=0, order_source="manual"):
         """Submit a generated Job batch and reschedule unfinished work."""
         with self.mutation_lock:
             with self.state.lock:
@@ -627,15 +971,14 @@ class SimulationManager:
 
             self.simulator.pause()
             try:
-                result = self.simulator.submitRandomJobsAndReoptimize(
-                    current_time=max(
-                        self.simulator.curr_time,
-                        self.simulator.clock.current_simulation_time,
-                        self.simulator.pending_event_timestamp
-                        or self.simulator.curr_time,
-                    ),
+                event = OrderInsertEvent(
+                    self.simulator.newEventId(),
+                    self._current_event_timestamp(),
                     seed=int(seed),
+                    source=order_source,
                 )
+                self._dispatch_current_event(event)
+                result = event.result
                 with self.state.lock:
                     self.state.plan = serialize_plan(
                         self.simulator.planned_operations
@@ -667,6 +1010,9 @@ class SimulationManager:
             response = {
                 "success": True,
                 "optimizer": "dynamic_job_submit",
+                "event_id": event.id,
+                "event_type": type(event).__name__,
+                "event_timestamp": event.timestamp,
                 **result,
             }
             if self.run_logger is not None:
@@ -684,6 +1030,450 @@ class SimulationManager:
     def submit_random_job(self, seed=0):
         """Backward-compatible alias for batch Job submission."""
         return self.submit_random_jobs(seed=seed)
+
+    def cancel_job(self, job_id):
+        """Cancel a Job and publish the updated Job list immediately."""
+        with self.mutation_lock:
+            with self.state.lock:
+                if self.simulator is None:
+                    raise ValueError("Simulation has not been started.")
+                if self.state.status != "running":
+                    raise ValueError(
+                        "Simulation must be running to cancel a job."
+                    )
+                self.state.status = "reoptimizing"
+
+            self.simulator.pause()
+            try:
+                event = OrderCancelEvent(
+                    self.simulator.newEventId(),
+                    self._current_event_timestamp(),
+                    [job_id],
+                    batch=False,
+                )
+                self._dispatch_current_event(event)
+                result = event.result
+                with self.state.lock:
+                    self.state.plan = serialize_plan(
+                        self.simulator.planned_operations
+                    )
+                    self.state.plan_revision += 1
+                    self.state.status = "running"
+                    self.state._update_simulator(self.simulator)
+                return {
+                    **result,
+                    "event_id": event.id,
+                    "event_type": type(event).__name__,
+                    "event_timestamp": event.timestamp,
+                }
+            except Exception:
+                with self.state.lock:
+                    self.state.status = "running"
+                raise
+            finally:
+                self.simulator.resume()
+
+    def cancel_jobs(self, job_ids, order_ids=None):
+        """Cancel several Jobs and publish one consolidated state update."""
+        with self.mutation_lock:
+            with self.state.lock:
+                if self.simulator is None:
+                    raise ValueError("Simulation has not been started.")
+                if self.state.status != "running":
+                    raise ValueError(
+                        "Simulation must be running to cancel jobs."
+                    )
+                self.state.status = "reoptimizing"
+
+            self.simulator.pause()
+            try:
+                event = OrderCancelEvent(
+                    self.simulator.newEventId(),
+                    self._current_event_timestamp(),
+                    job_ids,
+                    batch=True,
+                    order_ids=order_ids,
+                )
+                self._dispatch_current_event(event)
+                result = event.result
+                with self.state.lock:
+                    self.state.plan = serialize_plan(
+                        self.simulator.planned_operations
+                    )
+                    self.state.plan_revision += 1
+                    self.state.status = "running"
+                    self.state._update_simulator(self.simulator)
+                return {
+                    **result,
+                    "event_id": event.id,
+                    "event_type": type(event).__name__,
+                    "event_timestamp": event.timestamp,
+                }
+            except Exception:
+                with self.state.lock:
+                    self.state.status = "running"
+                raise
+            finally:
+                self.simulator.resume()
+
+    def cancel_orders(self, order_ids, job_ids=None):
+        """Cancel complete order batches and any additionally selected Jobs."""
+        if not isinstance(order_ids, list) or not order_ids:
+            raise ValueError("order_ids must be a non-empty list.")
+        with self.mutation_lock:
+            if self.simulator is None:
+                raise ValueError("Simulation has not been started.")
+            normalized_order_ids, batch_job_ids = (
+                self.simulator.orderBatchJobIds(order_ids)
+            )
+            selected_job_ids = list(batch_job_ids)
+            for job_id in job_ids or []:
+                normalized_job_id = int(job_id)
+                if normalized_job_id not in selected_job_ids:
+                    selected_job_ids.append(normalized_job_id)
+            return self.cancel_jobs(
+                selected_job_ids,
+                order_ids=normalized_order_ids,
+            )
+
+    def cancel_order(self, job_id):
+        """Alias using the order terminology exposed in the API."""
+        return self.cancel_job(job_id)
+
+    def handle_machine_anomaly(
+        self,
+        machine_id,
+        anomaly_type,
+        duration,
+    ):
+        """Apply a machine anomaly and reschedule long downtime with DRL."""
+        from simulator.anomaly import MachineAnomalyType
+
+        anomaly = MachineAnomalyType.normalize(anomaly_type)
+        with self.mutation_lock:
+            with self.state.lock:
+                if self.simulator is None:
+                    raise ValueError("Simulation has not been started.")
+                if self.state.status != "running":
+                    raise ValueError(
+                        "Simulation must be running to handle an anomaly."
+                    )
+                if anomaly == MachineAnomalyType.LONG_FAILURE:
+                    self.state.status = "reoptimizing"
+            if self.simulator.machine_recovery_reoptimizer is None:
+                self.simulator.machine_recovery_reoptimizer = (
+                    self._reoptimize_after_machine_recovery
+                )
+
+            if anomaly == MachineAnomalyType.LONG_FAILURE:
+                self.simulator.pause()
+                try:
+                    now = max(
+                        self.simulator.curr_time,
+                        self.simulator.clock.current_simulation_time,
+                        self.simulator.pending_event_timestamp
+                        or self.simulator.curr_time,
+                    )
+                    anomaly_event = MachineAnomalyEvent(
+                        self.simulator.newEventId(),
+                        now,
+                        machine_id,
+                        anomaly,
+                        duration,
+                    )
+                    self._dispatch_current_event(anomaly_event)
+                    anomaly_result = anomaly_event.result
+                    self.simulator.deferUnavailableTasks(
+                        current_time=now
+                    )
+                    model_result, assignments = (
+                        self._request_drl_assignments(
+                            num_samples=MACHINE_ANOMALY_DRL_NUM_SAMPLES,
+                            seed=int(self.simulator.seed),
+                            excluded_machines={int(machine_id)},
+                        )
+                    )
+                    reoptimization = (
+                        self.simulator.reoptimizeUnfinishedOperations(
+                            assignments,
+                            current_time=now,
+                            excluded_machines={int(machine_id)},
+                        )
+                    )
+                    with self.state.lock:
+                        self.state.plan = serialize_plan(
+                            self.simulator.planned_operations
+                        )
+                        self.state.plan_revision += 1
+                        self.state.status = "running"
+                        self.state._update_simulator(self.simulator)
+                    result = {
+                        **anomaly_result,
+                        "reschedule_method": "DRL",
+                        "optimizer": "drl",
+                        "model": model_result.get("model"),
+                        "num_samples": model_result.get("num_samples"),
+                        "model_objectives": model_result.get(
+                            "objectives"
+                        ),
+                        "event_id": anomaly_event.id,
+                        "event_type": type(anomaly_event).__name__,
+                        "event_timestamp": anomaly_event.timestamp,
+                        "reoptimization": reoptimization,
+                    }
+                    if self.run_logger is not None:
+                        self.run_logger.record_reoptimization(
+                            {
+                                "optimizer": "machine_anomaly_drl",
+                                "machine_id": int(machine_id),
+                                "anomaly_type": anomaly.value,
+                                "simulation_time": now,
+                            },
+                            result,
+                            self.simulator,
+                        )
+                    return result
+                except Exception:
+                    with self.state.lock:
+                        self.state.status = "running"
+                    raise
+                finally:
+                    self.simulator.resume()
+
+            anomaly_event = MachineAnomalyEvent(
+                self.simulator.newEventId(),
+                self._current_event_timestamp(),
+                machine_id,
+                anomaly,
+                duration,
+            )
+            self._dispatch_current_event(anomaly_event)
+            result = anomaly_event.result
+            with self.state.lock:
+                self.state.plan = serialize_plan(
+                    self.simulator.planned_operations
+                )
+                self.state.plan_revision += 1
+                self.state.status = "running"
+                self.state._update_simulator(self.simulator)
+            return {
+                **result,
+                "reschedule_method": None,
+                "event_id": anomaly_event.id,
+                "event_type": type(anomaly_event).__name__,
+                "event_timestamp": anomaly_event.timestamp,
+            }
+
+    def _choose_prediction_anomaly(self, machine_id, prediction_t):
+        """Choose a reproducible random anomaly and its default duration."""
+        rng = random.Random(
+            int(self.simulator.seed)
+            + int(prediction_t) * 104729
+            + int(machine_id) * 1000003
+        )
+        anomaly = rng.choice(list(MachineAnomalyType))
+        return anomaly, MACHINE_ANOMALY_DEFAULT_DURATIONS[anomaly]
+
+    def handle_prediction_alarms(self, t, predictions):
+        """Inject predicted anomalies once for one aligned detection time."""
+        if isinstance(t, bool):
+            raise ValueError("t must be an integer.")
+        try:
+            prediction_t = int(t)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("t must be an integer.") from exc
+        if prediction_t < 0:
+            raise ValueError("t must be non-negative.")
+        if not isinstance(predictions, list):
+            raise ValueError("predictions must be a list.")
+        if len(predictions) > 500:
+            raise ValueError(
+                "predictions must contain at most 500 machines."
+            )
+
+        with self.mutation_lock:
+            with self.state.lock:
+                generation = self.state.generation
+                if (
+                    self.simulator is None
+                    or self.state.status != "running"
+                ):
+                    return {
+                        "success": True,
+                        "t": prediction_t,
+                        "injected_machine_ids": [],
+                        "skipped_machines": [],
+                        "reason": "simulation_not_running",
+                    }
+                if self._prediction_alarm_generation != generation:
+                    self._prediction_alarm_generation = generation
+                    self._prediction_alarm_timestamps.clear()
+                if prediction_t in self._prediction_alarm_timestamps:
+                    return {
+                        "success": True,
+                        "t": prediction_t,
+                        "injected_machine_ids": [],
+                        "skipped_machines": [],
+                        "duplicate": True,
+                    }
+                self._prediction_alarm_timestamps.add(prediction_t)
+
+            injected_machine_ids = []
+            injected_events = []
+            skipped_machines = []
+            handled_machine_ids = set()
+            for prediction in predictions:
+                if (
+                    not isinstance(prediction, dict)
+                    or not prediction.get("is_alarm", False)
+                ):
+                    continue
+                raw_machine_id = prediction.get("machine_id")
+                if isinstance(raw_machine_id, bool):
+                    skipped_machines.append(
+                        {
+                            "machine_id": raw_machine_id,
+                            "reason": "invalid_machine_id",
+                        }
+                    )
+                    continue
+                try:
+                    machine_id = int(raw_machine_id)
+                except (TypeError, ValueError):
+                    skipped_machines.append(
+                        {
+                            "machine_id": raw_machine_id,
+                            "reason": "invalid_machine_id",
+                        }
+                    )
+                    continue
+                if not 0 <= machine_id < len(self.simulator.machines):
+                    skipped_machines.append(
+                        {
+                            "machine_id": machine_id,
+                            "reason": "unknown_machine",
+                        }
+                    )
+                    continue
+                if machine_id in handled_machine_ids:
+                    continue
+                machine = self.simulator.machines[machine_id]
+                if (
+                    machine.anomaly_type is not None
+                    or machine.machine_status
+                    in {"failed", "repairing", "degraded"}
+                ):
+                    skipped_machines.append(
+                        {
+                            "machine_id": machine_id,
+                            "reason": "active_anomaly",
+                        }
+                    )
+                    continue
+                handled_machine_ids.add(machine_id)
+                anomaly, duration = self._choose_prediction_anomaly(
+                    machine_id,
+                    prediction_t,
+                )
+                try:
+                    result = self.handle_machine_anomaly(
+                        machine_id,
+                        anomaly.value,
+                        duration,
+                    )
+                except Exception as exc:
+                    skipped_machines.append(
+                        {
+                            "machine_id": machine_id,
+                            "reason": str(exc),
+                        }
+                    )
+                    continue
+                injected_machine_ids.append(machine_id)
+                injected_events.append(
+                    {
+                        "machine_id": machine_id,
+                        "anomaly_type": anomaly.value,
+                        "anomaly_duration": duration,
+                        "event_id": result.get("event_id"),
+                        "event_type": result.get("event_type"),
+                        "event_timestamp": result.get(
+                            "event_timestamp"
+                        ),
+                        "machine_status": result.get("machine_status"),
+                        "recovery_time": result.get("recovery_time"),
+                    }
+                )
+
+            return {
+                "success": True,
+                "t": prediction_t,
+                "injected_machine_ids": injected_machine_ids,
+                "injected_events": injected_events,
+                "skipped_machines": skipped_machines,
+            }
+
+    def _reoptimize_after_machine_recovery(
+        self,
+        machine_id,
+        recovery_time,
+    ):
+        """Run DRL after a long-failure machine recovers."""
+        with self.state.lock:
+            self.state.status = "reoptimizing"
+        self.simulator.pause()
+        try:
+            self.simulator.deferUnavailableTasks(
+                current_time=recovery_time
+            )
+            model_result, assignments = (
+                self._request_drl_assignments(
+                    num_samples=MACHINE_ANOMALY_DRL_NUM_SAMPLES,
+                    seed=int(self.simulator.seed),
+                )
+            )
+            reoptimization = (
+                self.simulator.reoptimizeUnfinishedOperations(
+                    assignments,
+                    current_time=max(
+                        self.simulator.curr_time,
+                        float(recovery_time),
+                    ),
+                )
+            )
+            with self.state.lock:
+                self.state.plan = serialize_plan(
+                    self.simulator.planned_operations
+                )
+                self.state.plan_revision += 1
+                self.state.status = "running"
+                self.state._update_simulator(self.simulator)
+            response = {
+                "success": True,
+                "reschedule_method": "DRL",
+                "optimizer": "drl",
+                "model": model_result.get("model"),
+                "num_samples": model_result.get("num_samples"),
+                "model_objectives": model_result.get("objectives"),
+                **reoptimization,
+            }
+            if self.run_logger is not None:
+                self.run_logger.record_reoptimization(
+                    {
+                        "optimizer": "machine_recovery_drl",
+                        "machine_id": int(machine_id),
+                        "simulation_time": float(recovery_time),
+                    },
+                    response,
+                    self.simulator,
+                )
+            return response
+        except Exception:
+            with self.state.lock:
+                self.state.status = "running"
+            raise
+        finally:
+            self.simulator.resume()
 
     def set_auto_job_submission(self, enabled):
         if not isinstance(enabled, bool):
@@ -714,6 +1504,7 @@ class SimulationManager:
         remaining_jobs = (
             len(self.simulator.jobs)
             - len(self.simulator.finished_queue)
+            - sum(job.is_canceled for job in self.simulator.jobs)
         )
         if remaining_jobs > threshold:
             return
@@ -727,7 +1518,110 @@ class SimulationManager:
             )
             self.state.auto_job_submission_threshold = threshold
         self.submit_random_jobs(
-            seed=self.simulator.seed + self.auto_job_submission_count * 1000
+            seed=self.simulator.seed + self.auto_job_submission_count * 1000,
+            order_source="auto",
+        )
+
+    def set_auto_machine_anomaly(self, enabled):
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean.")
+        with self.mutation_lock:
+            self.auto_machine_anomaly_enabled = enabled
+            next_time = None
+            if (
+                enabled
+                and self.simulator is not None
+                and self.state.status == "running"
+            ):
+                next_time = (
+                    self._current_event_timestamp()
+                    + AUTO_MACHINE_ANOMALY_INTERVAL
+                )
+            self.next_auto_machine_anomaly_time = next_time
+            with self.state.lock:
+                self.state.auto_machine_anomaly_enabled = enabled
+                self.state.next_auto_machine_anomaly_time = next_time
+            return {
+                "ok": True,
+                "auto_machine_anomaly": (
+                    self.state.snapshot()["auto_machine_anomaly"]
+                ),
+            }
+
+    def _maybe_auto_insert_machine_anomaly(self):
+        if (
+            not self.auto_machine_anomaly_enabled
+            or self.simulator is None
+            or self.state.status != "running"
+        ):
+            return
+
+        now = self._current_event_timestamp()
+        if self.next_auto_machine_anomaly_time is None:
+            self.next_auto_machine_anomaly_time = (
+                now + AUTO_MACHINE_ANOMALY_INTERVAL
+            )
+            with self.state.lock:
+                self.state.next_auto_machine_anomaly_time = (
+                    self.next_auto_machine_anomaly_time
+                )
+            return
+        if now + 1e-9 < self.next_auto_machine_anomaly_time:
+            return
+
+        trigger_time = self.next_auto_machine_anomaly_time
+        next_time = trigger_time + AUTO_MACHINE_ANOMALY_INTERVAL
+        if next_time <= now + 1e-9:
+            next_time = now + AUTO_MACHINE_ANOMALY_INTERVAL
+        self.next_auto_machine_anomaly_time = next_time
+        candidates = [
+            machine
+            for machine in self.simulator.machines
+            if (
+                machine.anomaly_type is None
+                and machine.machine_status
+                not in {"failed", "repairing", "degraded"}
+            )
+        ]
+        if not candidates:
+            with self.state.lock:
+                self.state.next_auto_machine_anomaly_time = (
+                    self.next_auto_machine_anomaly_time
+                )
+            return
+
+        rng = random.Random(
+            int(self.simulator.seed)
+            + self.auto_machine_anomaly_count * 104729
+            + int(trigger_time * 1000)
+        )
+        machine = rng.choice(candidates)
+        anomaly = rng.choice(list(MachineAnomalyType))
+        minimum, maximum = MACHINE_ANOMALY_DURATION_RANGES[anomaly]
+        duration = rng.randint(minimum, maximum)
+
+        self.auto_machine_anomaly_count += 1
+        last_anomaly = {
+            "triggered_at": now,
+            "scheduled_for": trigger_time,
+            "machine_id": machine.machine_id,
+            "anomaly_type": anomaly.value,
+            "duration": duration,
+        }
+        self.last_auto_machine_anomaly = last_anomaly
+        with self.state.lock:
+            self.state.auto_machine_anomaly_count = (
+                self.auto_machine_anomaly_count
+            )
+            self.state.next_auto_machine_anomaly_time = (
+                self.next_auto_machine_anomaly_time
+            )
+            self.state.last_auto_machine_anomaly = dict(last_anomaly)
+
+        self.handle_machine_anomaly(
+            machine.machine_id,
+            anomaly.value,
+            duration,
         )
 
     @staticmethod
@@ -758,21 +1652,40 @@ class SimulationManager:
         """Load the DRL scheduler before the first reoptimization request."""
         return self._get_scheduler()
 
-    def _completeUnfinishedAssignments(self, assignments):
+    def _completeUnfinishedAssignments(
+        self,
+        assignments,
+        excluded_machines=None,
+    ):
         """Keep model-compatible assignments and cover dynamically added Jobs."""
         completed = dict(assignments)
+        excluded_machines = set(excluded_machines or [])
         for job in self.simulator.jobs:
             for task in job.tasks:
                 if task.status not in {"pending", "scheduled"}:
                     continue
                 key = (job.job_id, task.operation_id)
+                if key in self.simulator.deferred_anomaly_tasks:
+                    continue
                 if key in completed:
                     continue
-                if task.assigned_machine in task.eligible_machines:
+                if (
+                    task.assigned_machine in task.eligible_machines
+                    and task.assigned_machine not in excluded_machines
+                ):
                     completed[key] = task.assigned_machine
                 else:
+                    candidates = [
+                        machine_id
+                        for machine_id in task.eligible_machines
+                        if machine_id not in excluded_machines
+                    ]
+                    if not candidates:
+                        raise ValueError(
+                            f"No available machine for task {task.task_id}."
+                        )
                     completed[key] = min(
-                        task.eligible_machines,
+                        candidates,
                         key=lambda machine_id: (
                             task.processing_times[machine_id],
                             machine_id,
@@ -825,6 +1738,100 @@ class EmbeddedSimulationManager:
     def set_display_percent(self, display_percent):
         self.state.set_display_percent(display_percent)
 
+    def _current_event_timestamp(self):
+        return max(
+            self.simulator.curr_time,
+            self.simulator.clock.current_simulation_time,
+            self.simulator.pending_event_timestamp
+            or self.simulator.curr_time,
+        )
+
+    def _dispatch_current_event(self, event):
+        handled = self.simulator.dispatchEventImmediately(event)
+        if handled is False:
+            raise RuntimeError(
+                f"Event {type(event).__name__} was rejected."
+            )
+        return event
+
+    def set_paused(self, paused):
+        if not isinstance(paused, bool):
+            raise ValueError("paused must be a boolean.")
+        if self.simulator is None:
+            raise ValueError("Simulation has not been started.")
+        with self.state.lock:
+            if paused:
+                self.simulator.pause()
+                self.state.status = "paused"
+            else:
+                self.simulator.resume()
+                self.state.status = "running"
+        return {
+            "success": True,
+            "paused": paused,
+            "status": self.state.status,
+        }
+
+    def stop(self):
+        if self.simulator is None:
+            raise ValueError("Simulation has not been started.")
+        self.simulator.stop()
+        with self.state.lock:
+            self.state.stop(self.simulator)
+        return {
+            "success": True,
+            "status": self.state.status,
+            "stopped": True,
+        }
+
+    def cancel_job(self, job_id):
+        if self.simulator is None:
+            raise ValueError("Simulation has not been started.")
+        event = OrderCancelEvent(
+            self.simulator.newEventId(),
+            self._current_event_timestamp(),
+            [job_id],
+            batch=False,
+        )
+        self._dispatch_current_event(event)
+        result = {
+            **event.result,
+            "event_id": event.id,
+            "event_type": type(event).__name__,
+            "event_timestamp": event.timestamp,
+        }
+        with self.state.lock:
+            self.state.plan = serialize_plan(
+                self.simulator.planned_operations
+            )
+            self.state.plan_revision += 1
+            self.state._update_simulator(self.simulator)
+        return result
+
+    def cancel_jobs(self, job_ids):
+        if self.simulator is None:
+            raise ValueError("Simulation has not been started.")
+        event = OrderCancelEvent(
+            self.simulator.newEventId(),
+            self._current_event_timestamp(),
+            job_ids,
+            batch=True,
+        )
+        self._dispatch_current_event(event)
+        result = {
+            **event.result,
+            "event_id": event.id,
+            "event_type": type(event).__name__,
+            "event_timestamp": event.timestamp,
+        }
+        with self.state.lock:
+            self.state.plan = serialize_plan(
+                self.simulator.planned_operations
+            )
+            self.state.plan_revision += 1
+            self.state._update_simulator(self.simulator)
+        return result
+
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     server_version = "ProductionSimulatorWeb/1.0"
@@ -858,6 +1865,89 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/health":
             self._send_json({"ok": True})
+            return
+        if parsed.path == "/api/detection/meta":
+            try:
+                self._send_json(
+                    self.server.manager.detection_data.meta()
+                )
+            except Exception as exc:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=502,
+                )
+            return
+        if parsed.path == "/api/detection/machines":
+            try:
+                self._send_json(
+                    self.server.manager.detection_data.machines()
+                )
+            except Exception as exc:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=502,
+                )
+            return
+        if parsed.path == "/api/detection/overview":
+            try:
+                query = parse_qs(parsed.query)
+                t = int(query.get("t", ["0"])[0])
+                machine_count_value = query.get(
+                    "machine_count",
+                    [None],
+                )[0]
+                machine_count = (
+                    None
+                    if machine_count_value in {None, ""}
+                    else int(machine_count_value)
+                )
+                self._send_json(
+                    self.server.manager.detection_data.overview(
+                        t,
+                        machine_count=machine_count,
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=502,
+                )
+            return
+        if parsed.path == "/api/detection/predict":
+            try:
+                query = parse_qs(parsed.query)
+                t = int(query.get("t", ["0"])[0])
+                machine_count = int(
+                    query.get("machine_count", ["1"])[0]
+                )
+                prediction = (
+                    self.server.manager.detection_data.predict(
+                        t,
+                        machine_count=machine_count,
+                    )
+                )
+                injection = (
+                    self.server.manager.handle_prediction_alarms(
+                        prediction["t"],
+                        prediction["predictions"],
+                    )
+                )
+                self._send_json({**prediction, **injection})
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=502,
+                )
             return
         self._serve_static(parsed.path)
 
@@ -896,6 +1986,58 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError) as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
             return
+        if parsed.path == "/api/pause":
+            try:
+                result = self.server.manager.set_paused(
+                    body.get("paused")
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            return
+        if parsed.path == "/api/stop":
+            try:
+                self._send_json(self.server.manager.stop())
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            return
+        if parsed.path == "/api/anomalies/machine":
+            try:
+                result = self.server.manager.handle_machine_anomaly(
+                    machine_id=body.get("machine_id"),
+                    anomaly_type=body.get(
+                        "anomaly_type",
+                        body.get("type"),
+                    ),
+                    duration=body.get(
+                        "duration",
+                        body.get("repair_duration"),
+                    ),
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            return
         if parsed.path == "/api/display-percent":
             try:
                 self.server.manager.set_display_percent(
@@ -927,6 +2069,18 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                         ),
                     }
                 )
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"ok": False, "error": str(exc)},
+                    status=400,
+                )
+            return
+        if parsed.path == "/api/auto-machine-anomaly":
+            try:
+                result = self.server.manager.set_auto_machine_anomaly(
+                    body.get("enabled")
+                )
+                self._send_json(result)
             except (TypeError, ValueError) as exc:
                 self._send_json(
                     {"ok": False, "error": str(exc)},
@@ -1002,6 +2156,33 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 result = self.server.manager.submit_random_jobs(
                     seed=body.get("seed", 0),
                 )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            return
+        if parsed.path in {"/api/jobs/cancel", "/api/orders/cancel"}:
+            try:
+                if "order_ids" in body:
+                    result = self.server.manager.cancel_orders(
+                        body["order_ids"],
+                        job_ids=body.get("job_ids"),
+                    )
+                elif "job_ids" in body:
+                    result = self.server.manager.cancel_jobs(
+                        body["job_ids"]
+                    )
+                else:
+                    job_id = body.get("job_id", body.get("order_id"))
+                    result = self.server.manager.cancel_job(job_id)
                 self._send_json(result)
             except (TypeError, ValueError) as exc:
                 self._send_json(

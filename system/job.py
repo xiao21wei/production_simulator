@@ -34,8 +34,12 @@ class Task:
         self.transport_energy = 0
         self.transport_completed = False
         self.committed_transport_energy = 0
+        self.transport_segments = []
         self.current_location_machine = None
         self.waiting_time = 0
+        self.ready_not_before = None
+        self.interrupted_at = None
+        self.interrupted_processing_energy = 0
 
     @property
     def processing_time(self):
@@ -51,6 +55,12 @@ class Task:
 
     @property
     def total_transport_energy(self):
+        if self.transport_segments:
+            return self.committed_transport_energy + sum(
+                segment["transport_energy"]
+                for segment in self.transport_segments
+                if segment["completed"]
+            )
         current_leg = (
             self.transport_energy
             if self.transport_completed
@@ -99,6 +109,11 @@ class Job:
         self.tardiness = 0
         self.processing_energy = 0
         self.transport_energy = 0
+        self.canceled_at = None
+
+    @property
+    def is_canceled(self):
+        return self.canceled_at is not None
 
     @property
     def total_energy(self):

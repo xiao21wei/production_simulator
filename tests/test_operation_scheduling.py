@@ -85,6 +85,100 @@ class OperationSchedulingTest(unittest.TestCase):
                     previous.end_time,
                 )
 
+    def test_initial_schedule_creates_transport_segments(self):
+        simulator = self._create_simulator()
+        transported_tasks = 0
+
+        for job in simulator.jobs:
+            for task in job.tasks:
+                if not task.transport_time:
+                    continue
+                transported_tasks += 1
+                self.assertEqual(len(task.transport_segments), 1)
+                segment = task.transport_segments[0]
+                predecessor = job.tasks[task.operation_id - 1]
+                self.assertEqual(
+                    segment["source_machine"],
+                    predecessor.assigned_machine,
+                )
+                self.assertEqual(
+                    segment["target_machine"],
+                    task.assigned_machine,
+                )
+                self.assertEqual(
+                    segment["transport_start"],
+                    task.transport_start,
+                )
+                self.assertEqual(
+                    segment["transport_end"],
+                    task.transport_end,
+                )
+
+                planned = next(
+                    operation
+                    for operation in simulator.planned_operations
+                    if (
+                        operation.job_id,
+                        operation.operation_id,
+                    )
+                    == (job.job_id, task.operation_id)
+                )
+                self.assertEqual(
+                    planned.transport_segments,
+                    [segment],
+                )
+
+        self.assertGreater(transported_tasks, 0)
+
+    def test_transport_never_completes_before_predecessor_finishes(self):
+        simulator = self._create_simulator()
+        transport_events = []
+        finish_events = {}
+        original_handle_event = simulator.handleEvent
+
+        def capture(event):
+            result = original_handle_event(event)
+            if result is False:
+                return result
+            if isinstance(event, TransportFinishEvent):
+                transport_events.append(event)
+            elif isinstance(event, OperationFinishEvent):
+                finish_events[
+                    (event.job_id, event.operation_id)
+                ] = event.timestamp
+            return result
+
+        simulator.handleEvent = capture
+        with tempfile.TemporaryDirectory() as temp_dir:
+            simulator.schedule_file = str(
+                Path(temp_dir) / "schedule.csv"
+            )
+            simulator.gantt_file = str(
+                Path(temp_dir) / "gantt.txt"
+            )
+            simulator.run()
+
+        self.assertGreater(len(transport_events), 0)
+        for event in transport_events:
+            if event.operation_id == 0:
+                continue
+            self.assertGreaterEqual(
+                event.timestamp,
+                finish_events[
+                    (event.job_id, event.operation_id - 1)
+                ],
+            )
+
+    def test_stopped_simulator_returns_without_completion_validation(self):
+        simulator = self._create_simulator()
+        simulator.stop()
+
+        completed = simulator.run()
+
+        self.assertFalse(completed)
+        self.assertTrue(simulator.stop_event.is_set())
+        self.assertFalse(simulator.clock.is_running)
+
     def test_successor_priority_uses_transport_release_time(self):
         simulator = self._create_simulator()
 
@@ -163,23 +257,32 @@ class OperationSchedulingTest(unittest.TestCase):
                     current_task.transport_time,
                     expected_transport,
                 )
-                self.assertEqual(
-                    current_task.transport_start,
-                    previous_task.planned_end,
-                )
-                self.assertEqual(
-                    current_task.transport_end,
-                    current_task.transport_start
-                    + current_task.transport_time,
+                if expected_transport > 0:
+                    self.assertEqual(
+                        current_task.transport_start,
+                        previous_task.planned_end,
+                    )
+                    self.assertEqual(
+                        current_task.transport_end,
+                        current_task.transport_start
+                        + current_task.transport_time,
+                    )
+                else:
+                    self.assertIsNone(current_task.transport_start)
+                    self.assertIsNone(current_task.transport_end)
+                arrival_time = (
+                    current_task.transport_end
+                    if current_task.transport_end is not None
+                    else previous_task.planned_end
                 )
                 self.assertGreaterEqual(
                     current_task.planned_start,
-                    current_task.transport_end,
+                    arrival_time,
                 )
                 self.assertEqual(
                     current_task.waiting_time,
                     current_task.planned_start
-                    - current_task.transport_end,
+                    - arrival_time,
                 )
 
         self.assertEqual(len(scheduled_operations), len(expected_operations))
@@ -276,6 +379,16 @@ class OperationSchedulingTest(unittest.TestCase):
                 for machine in simulator.machines
             ),
         )
+
+    def test_terminal_validation_rejects_unfinished_operations(self):
+        simulator = self._create_simulator()
+        simulator.event_queue.clear()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "unfinished operations remain",
+        ):
+            simulator._validateSimulationCompletion()
 
     def test_external_reassignment_preserves_processing_and_replans_rest(self):
         simulator = self._create_simulator()
@@ -487,10 +600,12 @@ class OperationSchedulingTest(unittest.TestCase):
 
         self.assertEqual(task.assigned_machine, new_machine)
         self.assertEqual(task.source_machine, old_machine)
-        self.assertEqual(
-            task.committed_transport_energy,
-            old_transport_energy,
+        completed_segment_energy = sum(
+            segment["transport_energy"]
+            for segment in task.transport_segments
+            if segment["completed"]
         )
+        self.assertEqual(completed_segment_energy, old_transport_energy)
         self.assertEqual(
             task.transport_start,
             simulator.curr_time,
@@ -541,6 +656,342 @@ class OperationSchedulingTest(unittest.TestCase):
             old_transport_energy + expected_new_energy,
         )
         self.assertEqual(task.current_location_machine, new_machine)
+
+    def test_reoptimization_finishes_in_progress_transport_then_reroutes(self):
+        simulator = self._create_simulator()
+        simulator.updateEventQueue()
+        task = None
+        while simulator.event_queue:
+            task = next(
+                (
+                    candidate
+                    for job in simulator.jobs
+                    for candidate in job.tasks
+                    if (
+                        candidate.status == "scheduled"
+                        and candidate.actual_start is None
+                        and not candidate.transport_completed
+                        and candidate.transport_start is not None
+                        and candidate.transport_end is not None
+                        and candidate.transport_start
+                        <= simulator.curr_time
+                        < candidate.transport_end
+                    )
+                ),
+                None,
+            )
+            if task is not None:
+                break
+            event = simulator.event_queue.pop(0)
+            simulator.curr_time = event.timestamp
+            simulator.handleEvent(event)
+            simulator.updateEventQueue()
+        self.assertIsNotNone(task)
+
+        old_target = task.assigned_machine
+        old_source = task.source_machine
+        first_start = task.transport_start
+        first_end = task.transport_end
+        first_time = task.transport_time
+        first_energy = task.transport_energy
+        new_target = next(
+            machine_id
+            for machine_id in task.eligible_machines
+            if machine_id != old_target
+        )
+        second_time = simulator.transport_time[old_target][new_target]
+        second_energy = simulator.transport_energy[old_target][new_target]
+        assignments = {
+            (job.job_id, item.operation_id): item.assigned_machine
+            for job in simulator.jobs
+            for item in job.tasks
+            if item.status in {"pending", "scheduled"}
+        }
+        assignments[(task.job_id, task.operation_id)] = new_target
+
+        simulator.reoptimizeUnfinishedOperations(
+            assignments,
+            current_time=simulator.curr_time,
+        )
+
+        self.assertEqual(task.assigned_machine, new_target)
+        self.assertEqual(len(task.transport_segments), 2)
+        first_segment, second_segment = task.transport_segments
+        self.assertEqual(first_segment["source_machine"], old_source)
+        self.assertEqual(first_segment["target_machine"], old_target)
+        self.assertEqual(first_segment["transport_start"], first_start)
+        self.assertEqual(first_segment["transport_end"], first_end)
+        self.assertEqual(first_segment["transport_time"], first_time)
+        self.assertEqual(first_segment["transport_energy"], first_energy)
+        self.assertFalse(first_segment["completed"])
+        self.assertEqual(second_segment["source_machine"], old_target)
+        self.assertEqual(second_segment["target_machine"], new_target)
+        self.assertEqual(second_segment["transport_start"], first_end)
+        self.assertEqual(
+            second_segment["transport_end"],
+            first_end + second_time,
+        )
+        self.assertEqual(second_segment["transport_time"], second_time)
+        self.assertEqual(second_segment["transport_energy"], second_energy)
+        self.assertFalse(second_segment["completed"])
+        self.assertGreaterEqual(task.planned_start, second_segment["transport_end"])
+        self.assertEqual(task.transport_start, first_start)
+        self.assertEqual(task.transport_end, first_end)
+        self.assertFalse(task.transport_completed)
+
+        self._run_to_completion(simulator)
+
+        self.assertTrue(all(segment["completed"] for segment in task.transport_segments))
+        self.assertTrue(task.transport_completed)
+        self.assertEqual(task.current_location_machine, new_target)
+        self.assertGreaterEqual(task.actual_start, second_segment["transport_end"])
+        self.assertEqual(
+            task.total_transport_energy,
+            first_energy + second_energy,
+        )
+
+    def test_reoptimization_preserves_in_progress_transport_interval(self):
+        simulator = self._create_simulator()
+        simulator.updateEventQueue()
+        task = None
+        while simulator.event_queue:
+            task = next(
+                (
+                    candidate
+                    for job in simulator.jobs
+                    for candidate in job.tasks
+                    if (
+                        candidate.status == "scheduled"
+                        and candidate.actual_start is None
+                        and not candidate.transport_completed
+                        and candidate.transport_start is not None
+                        and candidate.transport_end is not None
+                        and candidate.transport_start
+                        <= simulator.curr_time
+                        < candidate.transport_end
+                    )
+                ),
+                None,
+            )
+            if task is not None:
+                break
+            event = simulator.event_queue.pop(0)
+            simulator.curr_time = event.timestamp
+            simulator.handleEvent(event)
+            simulator.updateEventQueue()
+        self.assertIsNotNone(task)
+
+        expected = (
+            task.source_machine,
+            task.assigned_machine,
+            task.transport_start,
+            task.transport_end,
+            task.transport_time,
+            task.transport_energy,
+        )
+        assignments = {
+            (job.job_id, item.operation_id): item.assigned_machine
+            for job in simulator.jobs
+            for item in job.tasks
+            if item.status in {"pending", "scheduled"}
+        }
+
+        simulator.reoptimizeUnfinishedOperations(
+            assignments,
+            current_time=simulator.curr_time,
+        )
+
+        self.assertEqual(len(task.transport_segments), 1)
+        segment = task.transport_segments[0]
+        self.assertEqual(
+            (
+                segment["source_machine"],
+                segment["target_machine"],
+                segment["transport_start"],
+                segment["transport_end"],
+                segment["transport_time"],
+                segment["transport_energy"],
+            ),
+            expected,
+        )
+        self.assertEqual(
+            (
+                task.source_machine,
+                task.assigned_machine,
+                task.transport_start,
+                task.transport_end,
+                task.transport_time,
+                task.transport_energy,
+            ),
+            expected,
+        )
+        self.assertFalse(task.transport_completed)
+
+    def test_reoptimization_discards_transport_before_predecessor_end(self):
+        simulator = self._create_simulator()
+        predecessor, successor = next(
+            (job.tasks[0], job.tasks[1])
+            for job in simulator.jobs
+            if (
+                job.tasks[0].assigned_machine
+                != job.tasks[1].assigned_machine
+            )
+        )
+        successor.transport_start = 0
+        successor.transport_end = 1
+        successor.transport_completed = False
+        assignments = {
+            (job.job_id, task.operation_id): task.assigned_machine
+            for job in simulator.jobs
+            for task in job.tasks
+            if task.status in {"pending", "scheduled"}
+        }
+
+        simulator.reoptimizeUnfinishedOperations(
+            assignments,
+            current_time=simulator.curr_time,
+        )
+
+        expected_transport = simulator.transport_time[
+            predecessor.assigned_machine
+        ][successor.assigned_machine]
+        self.assertEqual(len(successor.transport_segments), 1)
+        segment = successor.transport_segments[0]
+        self.assertEqual(segment["source_machine"], predecessor.assigned_machine)
+        self.assertGreaterEqual(segment["transport_start"], predecessor.planned_end)
+        self.assertEqual(segment["transport_time"], expected_transport)
+        self.assertGreaterEqual(
+            successor.planned_start,
+            segment["transport_end"],
+        )
+
+    def test_successor_transport_moves_to_actual_predecessor_finish(self):
+        simulator = self._create_simulator()
+        predecessor, successor = next(
+            (job.tasks[0], job.tasks[1])
+            for job in simulator.jobs
+            if (
+                job.tasks[0].assigned_machine
+                != job.tasks[1].assigned_machine
+            )
+        )
+        simulator.updateEventQueue()
+        old_transport_start = successor.transport_start
+        actual_finish = old_transport_start - 5
+        expected_transport = simulator.transport_time[
+            predecessor.assigned_machine
+        ][successor.assigned_machine]
+
+        simulator._alignSuccessorTransportToActualFinish(
+            predecessor.job_id,
+            predecessor.operation_id,
+            actual_finish,
+        )
+
+        self.assertEqual(len(successor.transport_segments), 1)
+        segment = successor.transport_segments[0]
+        self.assertEqual(segment["transport_start"], actual_finish)
+        self.assertEqual(
+            segment["transport_end"],
+            actual_finish + expected_transport,
+        )
+        self.assertEqual(successor.transport_start, actual_finish)
+        self.assertEqual(
+            successor.transport_end,
+            actual_finish + expected_transport,
+        )
+        transport_events = [
+            event
+            for event in simulator.event_queue
+            if (
+                isinstance(event, TransportFinishEvent)
+                and event.job_id == predecessor.job_id
+                and event.operation_id == successor.operation_id
+            )
+        ]
+        self.assertEqual(len(transport_events), 1)
+        self.assertEqual(
+            transport_events[0].timestamp,
+            actual_finish + expected_transport,
+        )
+
+    def test_ready_operation_starts_immediately_when_machine_is_idle(self):
+        simulator = self._create_simulator()
+        simulator.updateEventQueue()
+        machine = simulator.machines[0]
+        operation = machine.nextPendingOperation()
+        task = simulator.jobs[operation.job_id].tasks[
+            operation.operation_id
+        ]
+        operation.start_time = 30
+        operation.end_time = 31
+        task.planned_start = 30
+        task.planned_end = 31
+        task.transport_completed = True
+        current_time = max(
+            simulator.jobs[task.job_id].ready_time,
+            simulator.curr_time,
+        )
+
+        started = simulator._startReadyOperationIfPossible(
+            machine.machine_id,
+            current_time,
+        )
+
+        self.assertTrue(started)
+        start_events = [
+            event
+            for event in simulator.event_queue
+            if (
+                isinstance(event, OperationStartEvent)
+                and event.job_id == task.job_id
+                and event.operation_id == task.operation_id
+                and event.machine_id == machine.machine_id
+            )
+        ]
+        self.assertEqual(len(start_events), 1)
+        self.assertEqual(start_events[0].timestamp, current_time)
+        self.assertEqual(operation.start_time, current_time)
+        self.assertEqual(task.planned_start, current_time)
+
+    def test_successor_does_not_start_before_predecessor_completion(self):
+        simulator = self._create_simulator()
+        simulator.updateEventQueue()
+        predecessor, successor = next(
+            (job.tasks[0], job.tasks[1])
+            for job in simulator.jobs
+            if job.tasks[0].transport_completed is False
+            or job.tasks[0].assigned_machine != job.tasks[1].assigned_machine
+        )
+        start_event = OperationStartEvent(
+            simulator.newEventId(),
+            predecessor.planned_start,
+            successor.job_id,
+            successor.operation_id,
+            successor.assigned_machine,
+        )
+
+        handled = simulator.handleEvent(start_event)
+
+        self.assertFalse(handled)
+        self.assertIsNone(successor.actual_start)
+        self.assertEqual(successor.status, "scheduled")
+
+    def test_duplicate_operation_start_event_is_rejected(self):
+        simulator = self._create_simulator()
+        simulator.updateEventQueue()
+        event = simulator.event_queue.pop(0)
+        simulator.curr_time = event.timestamp
+        simulator.handleEvent(event)
+        duplicate = OperationStartEvent(
+            simulator.newEventId(),
+            event.timestamp,
+            event.job_id,
+            event.operation_id,
+            event.machine_id,
+        )
+
+        self.assertFalse(simulator.handleEvent(duplicate))
 
     def test_reoptimization_restores_processing_before_downstream_work(self):
         simulator = self._create_simulator()

@@ -1,0 +1,53 @@
+# 流式数据模拟服务配置
+# 所有路径均相对工程根目录；工程整体打包到别的服务器后无需改动本文件。
+server:
+  host: 0.0.0.0
+  port: 8000
+  cors_origins: ["*"]
+
+data:
+  base_data_path: data/anomaly.csv          # 真实基底(已随工程附带)
+  output_dir: data/machines                 # 已附带 15 台 + 按需生成
+  pre_generated_machines: 15               # 随包附带的机器数(0..14 原样使用)
+  base_seed: 42                            # seed = base_seed + machine_id, 确定性可复现
+  min_len: 10000                           # 时间点数(内部 ×2 = 行数)
+  normal_len_lower: 250
+  normal_len_upper: 1250
+  anomaly_len_lower: 10
+  anomaly_len_upper: 19
+  head_guard_rows: 200                     # D4: 仅对"按需新生成"的机器附加
+  tail_guard_rows: 200
+  enhancements:                           # E1-E4, 默认全关, 逐项可验证
+    per_machine_jitter: false
+    multi_anomaly_templates: false
+    poisson_placement: false
+    pre_failure_ramp: false
+    smooth_wrap: false                    # E5: 由 /window 的 wrapped 标记实现(不改数据)
+    jitter_std: 0.01
+    anomaly_template_count: 4
+    ramp_len_timepoints: 20
+
+contract:                                 # 与旧 CNN-LSTM 完全一致, 改动需升 version 并重跑回归
+  window_size: 100
+  step: 2                                 # 1 时间点 = 2 行
+  warmup_rows: 100
+  prediction_horizon: 20
+  time_step: 20
+  normalization: none
+  dtype: float32
+  model_input_shape: [1, 15, 100]
+  version: "1.0"
+  # features 固定顺序在 app/data/features.py 单一维护, 不在此重复
+
+display:
+  # 前端默认展示子集; 也可由请求参数 features 覆盖
+  subset: [TP2, Oil_temperature, Motor_current, DV_pressure,
+           COMP, DV_eletric, Towers, MPG, Pressure_switch]
+  # Okabe-Ito 色盲友好调色板：正常=蓝、预警=橙、故障=朱红，避开红绿对立；
+  # 前端另叠加斜纹(预警)、实心带+散点(故障)等形态冗余，不单纯依赖颜色。
+  colors:
+    normal: "#0072B2"
+    warn: "#E69F00"
+    fault: "#D55E00"
+    prediction: "#CC79A7"
+    unavailable: "#999999"

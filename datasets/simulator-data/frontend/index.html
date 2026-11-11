@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>机器数据流 · 实时展示（参考页）</title>
+<!-- 零外部依赖：纯原生 Canvas 2D，随服务一起打包，离线环境亦可用 -->
+<style>
+  /* Okabe-Ito 色盲友好配色：正常=蓝、预警=橙、故障=朱红，避开红绿对立。
+     另叠加斜纹/实心带/散点/文字等形态冗余，灰度打印与色盲下仍可区分。 */
+  :root{
+    --bg:#f5f7fa; --card:#fff; --line:#dfe4ea; --text:#2d3436; --muted:#7f8c8d;
+    --normal:#0072B2; --warn:#E69F00; --fault:#D55E00; --pred:#CC79A7; --off:#999999;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{padding:14px 20px;background:#2d3436;color:#fff;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  header h1{margin:0;font-size:17px;font-weight:600}
+  header .sub{font-size:12px;opacity:.75}
+  header a{color:#74b9ff;text-decoration:none;font-size:12px}
+  .wrap{padding:14px 20px;max-width:1400px;margin:0 auto}
+  .controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--card);
+            border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:12px}
+  .controls label{color:var(--muted);font-size:12px}
+  select,button,input{font:inherit;border:1px solid var(--line);border-radius:5px;
+                      padding:5px 10px;background:#fff;color:var(--text);cursor:pointer}
+  button.primary{background:var(--normal);border-color:var(--normal);color:#fff;min-width:86px}
+  button:hover{filter:brightness(.95)}
+  .spacer{flex:1}
+  .clock{font-variant-numeric:tabular-nums;font-weight:600;letter-spacing:.5px}
+  .badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#eee;color:var(--muted)}
+  .badge.wrap{background:#ffeaa7;color:#b7791f}
+  .err{background:#fff0f0;border:1px solid #ffc9c9;color:#c0392b;padding:8px 12px;
+       border-radius:6px;margin-bottom:12px;display:none}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .kpi .n{font-size:11px;color:var(--muted)}
+  .kpi .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
+  .kpi .u{font-size:11px;color:var(--muted);font-weight:400}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;
+         padding:10px 12px;margin-bottom:10px}
+  .panel h2{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--muted);
+            text-transform:uppercase;letter-spacing:.5px}
+  canvas{display:block;width:100%}
+  .chart{margin-bottom:8px}
+  .chart:last-child{margin-bottom:0}
+  .chart .cap{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin:0 0 2px}
+  .chart .cap b{color:var(--text);font-weight:600}
+  .rails .row{display:flex;align-items:center;gap:8px;margin:3px 0}
+  .rails .nm{width:120px;flex:none;font-size:11px;color:var(--muted);text-align:right}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);
+          align-items:center;padding:4px 2px 18px}
+  .legend i{display:inline-block;width:14px;height:10px;border-radius:2px;
+            vertical-align:middle;margin-right:5px}
+  .note{font-size:11px;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>机器数据流 · 实时展示</h1>
+  <span class="sub">流式数据模拟服务参考页 ｜ 前端驱动时钟 + 轮询 /api/v1/stream</span>
+  <span class="spacer" style="flex:1"></span>
+  <a href="/docs" target="_blank">接口文档 /docs</a>
+  <a href="/api/v1/meta" target="_blank">契约 /meta</a>
+</header>
+
+<div class="wrap">
+  <div id="err" class="err"></div>
+
+  <div class="controls">
+    <label>机器</label>
+    <select id="machine"></select>
+    <button id="play" class="primary">▶ 播放</button>
+    <label>速度</label>
+    <select id="speed">
+      <option value="1">1×</option><option value="2">2×</option><option value="4">4×</option>
+    </select>
+    <button id="reset">重置</button>
+    <span class="spacer"></span>
+    <span class="badge" id="wrappedBadge">未回绕</span>
+    <span class="clock" id="clock">t = 0</span>
+    <span class="badge" id="teff">t_eff = 0 / T = ?</span>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="panel">
+    <h2>状态标记带（共享时间轴）</h2>
+    <canvas id="band" height="34"></canvas>
+    <div class="note">橙 = 预警提前区（未来 20 个时间点内将故障）　红 = 故障中　灰竖虚线 = 数据集回绕 seam</div>
+  </div>
+
+  <div class="panel">
+    <h2>连续特征 · 小多图（各自独立 y 轴，真实量纲）</h2>
+    <div id="charts"></div>
+    <div class="note">不同量纲不画在同一坐标系；3 个常量特征（LPS / Oil_level / Caudal_impulses）已从展示剔除，模型输入仍保留。</div>
+  </div>
+
+  <div class="panel rails">
+    <h2>二值特征 · 状态轨</h2>
+    <div id="rails"></div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:var(--normal)"></i>正常（实线）</span>
+    <span><i style="background:repeating-linear-gradient(45deg,var(--warn),var(--warn) 3px,#fff 3px,#fff 6px)"></i>预警提前区 warn=1（斜纹带）</span>
+    <span><i style="background:var(--fault)"></i>故障中 label=1（实心带 + 红点）</span>
+    <span><i style="background:var(--off)"></i>预热 / 不可用（灰斜纹）</span>
+    <span>┊ 竖直虚线 = 数据集回绕 seam</span>
+    <span>模型预测预警（可选回传，本页未启用）＝ <span style="color:var(--pred)">■</span></span>
+    <span>悬浮折线查看该时间点原始值；判定条件见图例文字，不依赖颜色</span>
+  </div>
+</div>
+
+<script>
+"use strict";
+const S = {
+  meta:null, machines:[], detail:{}, continuous:[], binary:[], colors:{},
+  frames:[], t:0, teff:0, T:0, playing:false, speed:1, timer:null,
+  bufSize:120, mid:0, hover:null,
+};
+const $ = id => document.getElementById(id);
+const BASE = "/api/v1";
+
+function showErr(msg){
+  const e=$("err"); e.style.display="block";
+  e.textContent = "接口错误：" + msg;
+}
+function clearErr(){ $("err").style.display="none"; }
+
+function cssColor(name, alpha){
+  const c = S.colors[name] || name;
+  const h = c.replace("#","");
+  const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+/* 斜纹填充：预警区专用，灰度打印/色盲下仍与"实心故障带"可区分 */
+function hatch(ctx,x,y,w,h,name,alpha,step){
+  ctx.fillStyle=cssColor(name, alpha*0.30);
+  ctx.fillRect(x,y,w,h);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+  ctx.strokeStyle=cssColor(name, alpha);
+  ctx.lineWidth=1;
+  const s=step||6;
+  for(let k=-h;k<w+h;k+=s){
+    ctx.beginPath(); ctx.moveTo(x+k,y+h); ctx.lineTo(x+k+h,y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+async function init(){
+  try{
+    const [meta, ms] = await Promise.all([
+      fetch(BASE+"/meta").then(r=>r.json()),
+      fetch(BASE+"/machines").then(r=>r.json()),
+    ]);
+    S.meta=meta; S.machines=ms.machines; S.colors=meta.colors||{};
+    S.detail = Object.fromEntries(meta.features_detail.map(d=>[d.name,d]));
+    for(const f of meta.display_subset){
+      const d=S.detail[f];
+      if(d && d.type==="continuous") S.continuous.push(f); else S.binary.push(f);
+    }
+    const sel=$("machine");
+    sel.innerHTML = S.machines.map(m=>
+      `<option value="${m.machine_id}">machine_${m.machine_id} (T=${m.T}, 异常 ${(m.anomaly_ratio*100).toFixed(1)}%)</option>`
+    ).join("");
+    sel.value = String(S.machines[0]?.machine_id ?? 0);
+    S.mid = Number(sel.value);
+
+    buildKpis(); buildCharts(); buildRails();
+    bind(); resizeAll(); render();
+  }catch(e){ showErr(e.message); }
+}
+
+function buildKpis(){
+  $("kpis").innerHTML = S.continuous.map(f=>{
+    const d=S.detail[f];
+    return `<div class="kpi"><div class="n">${f}</div>
+            <div class="v" id="kpi_${f}">— <span class="u">${d.unit}</span></div></div>`;
+  }).join("");
+}
+function buildCharts(){
+  $("charts").innerHTML = S.continuous.map(f=>
+    `<div class="chart"><div class="cap"><b>${f}</b>
+       <span id="range_${f}">min — max</span></div>
+     <canvas id="c_${f}" height="92"></canvas></div>`
+  ).join("");
+}
+function buildRails(){
+  $("rails").innerHTML = S.binary.map(f=>
+    `<div class="row"><span class="nm">${f}</span><canvas id="r_${f}" height="16"></canvas></div>`
+  ).join("");
+}
+
+function bind(){
+  $("play").onclick = ()=>{ S.playing=!S.playing;
+    $("play").textContent = S.playing ? "⏸ 暂停" : "▶ 播放";
+    if(S.playing) tick(); else clearTimeout(S.timer);
+  };
+  $("speed").onchange = e=>{ S.speed=Number(e.target.value);
+    if(S.playing){ clearTimeout(S.timer); schedule(); } };
+  $("reset").onclick = ()=>reset();
+  $("machine").onchange = e=>{ S.mid=Number(e.target.value); reset(); };
+  window.addEventListener("resize", ()=>{ resizeAll(); render(); });
+  for(const f of S.continuous){
+    const c=$("c_"+f);
+    if(!c) continue;
+    c.onmousemove = ev=>{
+      const r=c.getBoundingClientRect();
+      S.hover = Math.round((ev.clientX-r.left)/r.width*(S.frames.length-1));
+      render();
+    };
+    c.onmouseleave = ()=>{ S.hover=null; render(); };
+  }
+}
+function reset(){
+  clearTimeout(S.timer); S.playing=false; S.frames=[]; S.t=0; S.teff=0; S.hover=null;
+  $("play").textContent="▶ 播放";
+  render();
+}
+function schedule(){ if(S.playing) S.timer=setTimeout(tick, 500/S.speed); }
+
+async function tick(){
+  if(!S.playing) return;
+  try{
+    const r = await fetch(`${BASE}/stream?machine_id=${S.mid}&from_t=${S.t}&count=1`);
+    if(!r.ok) throw new Error("HTTP "+r.status+" "+await r.text());
+    const d = await r.json();
+    const f = d.frames[0];
+    S.frames.push(f);
+    if(S.frames.length>S.bufSize) S.frames.shift();
+    S.T=d.T; S.teff=f.t_effective; S.t+=1;
+    clearErr(); render();
+  }catch(e){ showErr(e.message); }
+  finally{ schedule(); }
+}
+
+/* ---------- 绘制 ---------- */
+function prep(canvas){
+  const dpr = window.devicePixelRatio||1;
+  const w = canvas.clientWidth||800, h=Number(canvas.getAttribute("height"))||92;
+  canvas.width=Math.round(w*dpr); canvas.height=Math.round(h*dpr);
+  const ctx=canvas.getContext("2d");
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+  return {ctx,w,h};
+}
+function resizeAll(){ /* 尺寸在每次 prep 时按 clientWidth 重算 */ }
+
+function drawBand(){
+  const {ctx,w,h}=prep($("band"));
+  const n=S.frames.length;
+  ctx.fillStyle="#fafbfc"; ctx.fillRect(0,0,w,h);
+  if(!n){ placeholder(ctx,w,h); return; }
+  const bw=w/n;
+  S.frames.forEach((f,i)=>{
+    const x=i*bw, ww=Math.max(bw,.6);
+    if(f.label){ ctx.fillStyle=cssColor("fault",.9); ctx.fillRect(x,0,ww,h); }
+    else if(f.warn){ hatch(ctx,x,0,ww,h,"warn",.8,6); }
+    else { ctx.fillStyle=cssColor("normal",.08); ctx.fillRect(x,0,ww,h); }
+    if(i>0 && f.t_effective===0 && S.frames[i-1].t_effective!==0){
+      ctx.strokeStyle="#636e72"; ctx.setLineDash([3,3]); ctx.beginPath();
+      ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle="#2d3436"; ctx.font="9px sans-serif";
+      ctx.fillText("回绕", Math.min(x+2,w-26), 10);
+    }
+  });
+}
+
+function drawChart(f){
+  const canvas=$("c_"+f); if(!canvas) return;
+  const {ctx,w,h}=prep(canvas);
+  const n=S.frames.length;
+  if(!n){ placeholder(ctx,w,h); return; }
+  const vals=S.frames.map(fr=>fr.values[f]);
+  const lo=Math.min(...vals), hi=Math.max(...vals);
+  const pad=(hi-lo)*0.15 || Math.max(Math.abs(hi)*0.1,0.01);
+  const min=lo-pad, max=hi+pad, span=(max-min)||1;
+  const bw=w/n, top=6, bot=h-6, ph=bot-top;
+  const y=v=>bot-(v-min)/span*ph;
+
+  // 状态背景带（与各图共享 x 轴）
+  S.frames.forEach((fr,i)=>{
+    const x=i*bw, ww=Math.max(bw,.6);
+    if(fr.label){ ctx.fillStyle=cssColor("fault",.18); ctx.fillRect(x,0,ww,h); }
+    else if(fr.warn){ hatch(ctx,x,0,ww,h,"warn",.28,7); }
+    else return;
+    if(i>0 && fr.t_effective===0 && S.frames[i-1].t_effective!==0){
+      ctx.strokeStyle="#b2bec3"; ctx.setLineDash([3,3]); ctx.beginPath();
+      ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); ctx.setLineDash([]);
+    }
+  });
+  // 网格
+  ctx.strokeStyle="#eceff1"; ctx.lineWidth=1;
+  [0,.5,1].forEach(p=>{ const yy=top+p*ph; ctx.beginPath();
+    ctx.moveTo(0,yy); ctx.lineTo(w,yy); ctx.stroke(); });
+  // 折线
+  ctx.strokeStyle=S.colors.normal||"#1f77b4"; ctx.lineWidth=1.6;
+  ctx.beginPath();
+  vals.forEach((v,i)=>{ const x=i*bw+bw/2;
+    if(i===0) ctx.moveTo(x,y(v)); else ctx.lineTo(x,y(v)); });
+  ctx.stroke();
+  // 故障点
+  ctx.fillStyle=S.colors.fault||"#d62728";
+  S.frames.forEach((fr,i)=>{ if(fr.label){
+    ctx.beginPath(); ctx.arc(i*bw+bw/2,y(vals[i]),2.4,0,Math.PI*2); ctx.fill(); }});
+  // y 轴刻度
+  ctx.fillStyle="#7f8c8d"; ctx.font="10px sans-serif";
+  ctx.fillText(max.toFixed(2),2,11); ctx.fillText(min.toFixed(2),2,h-2);
+  $("range_"+f).textContent=`${lo.toFixed(2)} ~ ${hi.toFixed(2)}`;
+  // 悬浮
+  if(S.hover!=null && S.hover>=0 && S.hover<n){
+    const i=S.hover, x=i*bw+bw/2;
+    ctx.strokeStyle="#636e72"; ctx.setLineDash([2,2]); ctx.beginPath();
+    ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle=S.colors.fault||"#d62728";
+    ctx.beginPath(); ctx.arc(x,y(vals[i]),3,0,Math.PI*2); ctx.fill();
+    drawTip(ctx,w,h,`t=${S.frames[i].t}  ${f}=${vals[i].toFixed(4)}  `+
+                    `label=${S.frames[i].label} warn=${S.frames[i].warn}`,x);
+  }
+}
+function drawTip(ctx,w,h,text,x){
+  ctx.font="11px sans-serif";
+  const tw=ctx.measureText(text).width+12;
+  const tx=Math.min(Math.max(2,x-tw/2),w-tw-2);
+  ctx.fillStyle="rgba(45,52,54,.9)"; ctx.fillRect(tx,h-20,tw,16);
+  ctx.fillStyle="#fff"; ctx.fillText(text,tx+6,h-9);
+}
+
+function drawRail(f){
+  const canvas=$("r_"+f); if(!canvas) return;
+  const {ctx,w,h}=prep(canvas);
+  const n=S.frames.length;
+  if(!n){ ctx.fillStyle="#fafbfc"; ctx.fillRect(0,0,w,h); return; }
+  const bw=w/n;
+  S.frames.forEach((fr,i)=>{
+    const v=fr.values[f];
+    ctx.fillStyle = v>0.5 ? cssColor("normal",.85) : "#e9edf0";
+    ctx.fillRect(i*bw,1,Math.max(bw-.5,.5),h-2);
+    if(fr.label){ ctx.fillStyle=cssColor("fault",.5);
+      ctx.fillRect(i*bw,1,Math.max(bw-.5,.5),h-2); }
+  });
+}
+function placeholder(ctx,w,h){
+  ctx.fillStyle="#fafbfc"; ctx.fillRect(0,0,w,h);
+  ctx.fillStyle="#b2bec3"; ctx.font="12px sans-serif";
+  ctx.fillText("等待数据… 点击「播放」开始轮询",10,h/2+4);
+}
+
+function render(){
+  $("clock").textContent="t = "+S.t;
+  $("teff").textContent=`t_eff = ${S.teff} / T = ${S.T||"?"}`;
+  const last=S.frames[S.frames.length-1];
+  const wb=$("wrappedBadge");
+  if(last && last.wrapped){ wb.textContent="已回绕 (t % T)"; wb.classList.add("wrap"); }
+  else { wb.textContent="未回绕"; wb.classList.remove("wrap"); }
+  for(const f of S.continuous){
+    const el=$("kpi_"+f); if(!el) continue;
+    const d=S.detail[f];
+    el.innerHTML=(last? last.values[f].toFixed(3):"—")+
+                 ` <span class="u">${d.unit}</span>`;
+  }
+  drawBand();
+  S.continuous.forEach(drawChart);
+  S.binary.forEach(drawRail);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -102,6 +102,52 @@ def _validate_config(config):
     ):
         raise ValueError("visualization.port must be between 1 and 65535.")
 
+    detection_data = config.get("detection_data")
+    if detection_data is not None:
+        if not isinstance(detection_data, dict):
+            raise ValueError("detection_data must be a JSON object.")
+        if "base_url" in detection_data and (
+            not isinstance(detection_data["base_url"], str)
+            or not detection_data["base_url"]
+        ):
+            raise ValueError("detection_data.base_url must be non-empty.")
+        _require_positive_number(
+            detection_data,
+            "timeout",
+            "detection_data",
+        )
+        history_points = detection_data.get("history_points")
+        if (
+            not isinstance(history_points, int)
+            or isinstance(history_points, bool)
+            or not 1 <= history_points <= 300
+        ):
+            raise ValueError(
+                "detection_data.history_points must be between 1 and 300."
+            )
+        poll_interval_ms = detection_data.get("poll_interval_ms")
+        if (
+            not isinstance(poll_interval_ms, int)
+            or isinstance(poll_interval_ms, bool)
+            or poll_interval_ms < 1
+        ):
+            raise ValueError(
+                "detection_data.poll_interval_ms must be a positive integer."
+            )
+        prediction_interval = detection_data.get(
+            "prediction_interval",
+            5,
+        )
+        if (
+            not isinstance(prediction_interval, int)
+            or isinstance(prediction_interval, bool)
+            or not 1 <= prediction_interval <= 100
+        ):
+            raise ValueError(
+                "detection_data.prediction_interval must be an integer "
+                "between 1 and 100."
+            )
+
 
 def _require_positive_number(section, key, section_name):
     value = section.get(key)

@@ -16,10 +16,26 @@ class Machine:
         self.operation_times = operation_times
         self.operation_energy = operation_energy
         self.pending_operations = []
+        self.anomaly_type = None
+        self.anomaly_started_at = None
+        self.recovery_time = None
+        self.performance_factor = 1.0
 
     def enqueueOperation(self, operation):
         if not isinstance(operation, PlannedOperation):
             raise TypeError("operation must be a PlannedOperation.")
+        for existing in self.pending_operations:
+            if (
+                existing.job_id == operation.job_id
+                and existing.operation_id == operation.operation_id
+            ):
+                existing.machine_id = operation.machine_id
+                existing.start_time = operation.start_time
+                existing.end_time = operation.end_time
+                existing.transport_segments = list(
+                    operation.transport_segments
+                )
+                return
         self.pending_operations.append(operation)
 
     def nextPendingOperation(self):
@@ -40,9 +56,15 @@ class Machine:
         self.ready_time = time
 
     def addOperation(self, time):
-        self.machine_status = "busy"
+        if (
+            self.anomaly_type != "degraded"
+            and self.machine_status not in {"failed", "repairing"}
+        ):
+            self.machine_status = "busy"
 
     def finishOperation(self, time, scheduled_count):
+        if self.machine_status in {"failed", "repairing", "degraded"}:
+            return
         if scheduled_count > 0:
             self.machine_status = "scheduled"
         elif scheduled_count == 0:

@@ -9,6 +9,19 @@ from web_app import SimulationManager
 
 
 class DynamicJobTest(unittest.TestCase):
+    def test_initial_jobs_are_registered_as_timestamped_order(self):
+        simulator = self._create_simulator()
+
+        self.assertEqual(len(simulator.order_batches), 1)
+        order_batch = simulator.order_batches[0]
+        self.assertEqual(order_batch.order_id, "T+0")
+        self.assertEqual(order_batch.submitted_at, 0)
+        self.assertEqual(order_batch.source, "initial")
+        self.assertEqual(
+            order_batch.job_ids,
+            [job.job_id for job in simulator.jobs],
+        )
+
     def test_random_job_uses_create_instance_ranges(self):
         simulator = self._create_simulator()
         job = generate_random_job(
@@ -115,6 +128,13 @@ class DynamicJobTest(unittest.TestCase):
         result = manager.submit_random_jobs(seed=7)
 
         new_jobs = result["new_jobs"]
+        self.assertEqual(result["order_id"], "T+20")
+        self.assertEqual(result["order_source"], "manual")
+        self.assertEqual(len(simulator.order_batches), 2)
+        self.assertEqual(
+            simulator.order_batches[-1].job_ids,
+            [job["job_id"] for job in new_jobs],
+        )
         self.assertEqual(result["initial_job_count"], 15)
         self.assertEqual(result["submitted_job_count"], 7)
         self.assertEqual(len(new_jobs), 7)
@@ -229,6 +249,15 @@ class DynamicJobTest(unittest.TestCase):
         )
         self.assertEqual(len(simulator.jobs), 29)
         self.assertEqual(manager.state.total_jobs, 29)
+        self.assertEqual(len(simulator.order_batches), 3)
+        self.assertEqual(
+            [batch.source for batch in simulator.order_batches],
+            ["initial", "auto", "auto"],
+        )
+        self.assertEqual(
+            sum(len(batch.job_ids) for batch in simulator.order_batches),
+            len(simulator.jobs),
+        )
 
         manager.set_auto_job_submission(False)
         for _ in range(3000):

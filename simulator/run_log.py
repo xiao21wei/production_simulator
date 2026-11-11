@@ -99,7 +99,9 @@ class SimulationRunLogger:
                         "processing_energy": job.processing_energy,
                         "transport_energy": job.transport_energy,
                         "status": (
-                            "completed"
+                            "canceled"
+                            if job.is_canceled
+                            else "completed"
                             if all(
                                 task.status == "completed"
                                 for task in job.tasks
@@ -111,54 +113,61 @@ class SimulationRunLogger:
                         ],
                     }
                 )
-            self._write_json(
-                "summary.json",
-                {
-                    "started_at": self.started_at,
-                    "finished_at": datetime.now().astimezone().isoformat(),
-                    "makespan": simulator.makespan,
-                    "objectives": dict(simulator.objectives),
-                    "energy_components": {
-                        "processing": simulator.total_processing_energy,
-                        "transport": simulator.total_transport_energy,
-                        "auxiliary": simulator.total_auxiliary_energy,
-                        "total": simulator.total_energy,
-                    },
-                    "jobs_completed": len(simulator.finished_queue),
-                    "jobs_total": len(simulator.jobs),
-                    "remaining_machine_queue": sum(
-                        len(machine.pending_operations)
-                        for machine in simulator.machines
-                    ),
-                    "remaining_events": len(simulator.event_queue),
-                    "machines": [
-                        {
-                            "machine_id": machine.machine_id,
-                            "status": machine.machine_status,
-                            "ready_time": machine.ready_time,
-                        }
-                        for machine in simulator.machines
-                    ],
-                    "jobs": jobs,
-                    "schedule": [
-                        {
-                            "machine_id": machine_id,
-                            "job_id": job_id,
-                            "operation_id": operation_id,
-                            "start_time": simulator.schedule.start_time[
-                                machine_id
-                            ][index],
-                            "end_time": simulator.schedule.end_time[
-                                machine_id
-                            ][index],
-                        }
-                        for machine_id, items in enumerate(
-                            simulator.schedule.schedule_items
-                        )
-                        for index, (job_id, operation_id) in enumerate(items)
-                    ],
+            summary = {
+                "started_at": self.started_at,
+                "finished_at": datetime.now().astimezone().isoformat(),
+                "makespan": simulator.makespan,
+                "objectives": dict(simulator.objectives),
+                "energy_components": {
+                    "processing": simulator.total_processing_energy,
+                    "transport": simulator.total_transport_energy,
+                    "auxiliary": simulator.total_auxiliary_energy,
+                    "total": simulator.total_energy,
                 },
-            )
+                "jobs_completed": len(simulator.finished_queue),
+                "jobs_canceled": len(simulator.canceled_orders),
+                "jobs_total": len(simulator.jobs),
+                "remaining_machine_queue": sum(
+                    len(machine.pending_operations)
+                    for machine in simulator.machines
+                ),
+                "remaining_events": len(simulator.event_queue),
+                "machines": [
+                    {
+                        "machine_id": machine.machine_id,
+                        "status": machine.machine_status,
+                        "ready_time": machine.ready_time,
+                        "anomaly_type": machine.anomaly_type,
+                        "anomaly_started_at": (
+                            machine.anomaly_started_at
+                        ),
+                        "recovery_time": machine.recovery_time,
+                        "performance_factor": (
+                            machine.performance_factor
+                        ),
+                    }
+                    for machine in simulator.machines
+                ],
+                "jobs": jobs,
+                "schedule": [
+                    {
+                        "machine_id": machine_id,
+                        "job_id": job_id,
+                        "operation_id": operation_id,
+                        "start_time": simulator.schedule.start_time[
+                            machine_id
+                        ][index],
+                        "end_time": simulator.schedule.end_time[
+                            machine_id
+                        ][index],
+                    }
+                    for machine_id, items in enumerate(
+                        simulator.schedule.schedule_items
+                    )
+                    for index, (job_id, operation_id) in enumerate(items)
+                ],
+            }
+            self._write_json("summary.json", summary)
 
     def fail(self, error):
         with self.lock:
@@ -174,7 +183,7 @@ class SimulationRunLogger:
     def _event_data(self, event):
         data = {}
         for key, value in vars(event).items():
-            if key == "anomaly" or value is None:
+            if key in {"anomaly", "result"} or value is None:
                 continue
             if isinstance(value, (str, int, float, bool, list, dict)):
                 data[key] = value
@@ -226,12 +235,20 @@ class SimulationRunLogger:
             "transport_time": task.transport_time,
             "transport_energy": task.transport_energy,
             "transport_completed": task.transport_completed,
+            "transport_segments": [
+                dict(segment) for segment in task.transport_segments
+            ],
             "committed_transport_energy": (
                 task.committed_transport_energy
             ),
             "total_transport_energy": task.total_transport_energy,
             "current_location_machine": task.current_location_machine,
             "waiting_time": task.waiting_time,
+            "ready_not_before": task.ready_not_before,
+            "interrupted_at": task.interrupted_at,
+            "interrupted_processing_energy": (
+                task.interrupted_processing_energy
+            ),
             "processing_time": (
                 task.processing_time
                 if task.assigned_machine is not None

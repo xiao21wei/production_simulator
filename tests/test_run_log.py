@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from simulator.event import OrderInsertEvent
 from simulator.run_log import SimulationRunLogger
 from simulator.simulator import Simulator
 
@@ -78,6 +79,35 @@ class SimulationRunLoggerTest(unittest.TestCase):
                 "OperationFinishEvent",
                 {row["event_type"] for row in event_rows},
             )
+
+    def test_control_event_payload_is_logged_without_runtime_result(self):
+        simulator = Simulator(realtime=False)
+        simulator.log_tag = False
+        simulator.init()
+        event = OrderInsertEvent(
+            simulator.newEventId(),
+            simulator.curr_time,
+            seed=23,
+        )
+        event.job_ids = [15, 16]
+        event.job_count = 2
+        event.result = {"private_runtime_detail": "not persisted"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger = SimulationRunLogger(temp_dir)
+            logger.start({"speed": 10})
+            logger.record_event(event, simulator)
+            row = json.loads(
+                (Path(temp_dir) / "latest" / "events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()[0]
+            )
+
+        self.assertEqual(row["event_type"], "OrderInsertEvent")
+        self.assertEqual(row["seed"], 23)
+        self.assertEqual(row["job_ids"], [15, 16])
+        self.assertEqual(row["job_count"], 2)
+        self.assertNotIn("result", row)
 
 
 if __name__ == "__main__":
