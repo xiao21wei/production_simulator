@@ -249,6 +249,10 @@ class SimulationRunLogger:
             "interrupted_processing_energy": (
                 task.interrupted_processing_energy
             ),
+            "material_consumption": dict(task.material_consumption),
+            "material_consumption_committed": (
+                task.material_consumption_committed
+            ),
             "processing_time": (
                 task.processing_time
                 if task.assigned_machine is not None

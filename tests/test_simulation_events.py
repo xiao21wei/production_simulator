@@ -7,6 +7,7 @@ from simulator.event import (
     MachineRecoveryEvent,
     OrderCancelEvent,
     OrderInsertEvent,
+    ProcessStageBatchScheduleEvent,
 )
 from simulator.simulator import Simulator
 from web_app import SimulationManager, serialize_event
@@ -22,6 +23,7 @@ class SimulationEventTest(unittest.TestCase):
             config_path=DEFAULT_CONFIG_PATH,
             speed=5,
             realtime=False,
+            anomaly_handling_enabled=True,
         )
         manager.simulator = simulator
         manager.selected_source = manager.datasets_by_id[
@@ -207,6 +209,40 @@ class SimulationEventTest(unittest.TestCase):
                 event["type"]
                 for event in manager.state.snapshot()["events"]
             },
+        )
+
+    def test_process_stage_batch_event_serialization(self):
+        simulator, _, _ = self._manager()
+        event = ProcessStageBatchScheduleEvent(
+            simulator.newEventId(),
+            25,
+            2,
+            10,
+        )
+        event.add_job(0, 18)
+        event.add_job(1, 20)
+        event.result = {
+            "stage_id": 2,
+            "job_ids": [0, 1],
+            "job_count": 2,
+            "planned_operation_count": 12,
+        }
+
+        self.assertEqual(
+            event.getEventType(),
+            EventType.PROCESS_STAGE_BATCH_SCHEDULE,
+        )
+        event_data = serialize_event(event, simulator)
+        self.assertEqual(
+            event_data["type"],
+            "ProcessStageBatchScheduleEvent",
+        )
+        self.assertEqual(event_data["stage_id"], 2)
+        self.assertEqual(event_data["batch_window"], 10)
+        self.assertEqual(event_data["job_ids"], [0, 1])
+        self.assertEqual(
+            event_data["job_ready_times"],
+            {0: 18.0, 1: 20.0},
         )
 
 

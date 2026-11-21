@@ -1,0 +1,2700 @@
+{
+  "format_version": 1,
+  "instance": "fjsp.hurink.vdata-car5.m6j10c5.fjs",
+  "process_id": 2,
+  "process_name": "焊装",
+  "num_jobs": 10,
+  "num_machines": 5,
+  "num_operations": 60,
+  "rules": {
+    "deterministic_seed": "sha256(instance, process, job, version)",
+    "processing_energy_unit": "energy_unit",
+    "transport_energy_unit": "energy_unit",
+    "fixed_task_count": 6,
+    "time_ratio_range": [
+      0.55,
+      0.8
+    ],
+    "time_ratio_default": 0.65,
+    "energy_ratio_range": [
+      0.55,
+      0.85
+    ],
+    "energy_ratio_default": 0.7,
+    "machine_speed_factor_range": [
+      0.85,
+      1.2
+    ],
+    "machine_energy_factor_range": [
+      0.9,
+      1.15
+    ]
+  },
+  "jobs": [
+    {
+      "job_id": 0,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_GLOSS_BLACK",
+        "two_tone": true,
+        "synthetic": true
+      },
+      "stamping_time": 2822.0,
+      "stamping_energy": 65.80000000000001,
+      "time_ratio": 0.6321802500585332,
+      "energy_ratio": 0.7026134937922407,
+      "target_processing_time": 150,
+      "target_processing_energy": 45,
+      "raw_tasks": [
+        [
+          [
+            4,
+            22
+          ]
+        ],
+        [
+          [
+            1,
+            23
+          ],
+          [
+            2,
+            25
+          ],
+          [
+            5,
+            28
+          ]
+        ],
+        [
+          [
+            5,
+            23
+          ]
+        ],
+        [
+          [
+            1,
+            26
+          ],
+          [
+            3,
+            29
+          ],
+          [
+            4,
+            28
+          ]
+        ],
+        [
+          [
+            3,
+            26
+          ],
+          [
+            4,
+            24
+          ]
+        ],
+        [
+          [
+            1,
+            26
+          ],
+          [
+            4,
+            25
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            4,
+            2
+          ]
+        ],
+        [
+          [
+            1,
+            11
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            5,
+            9
+          ]
+        ],
+        [
+          [
+            1,
+            7
+          ],
+          [
+            3,
+            7
+          ],
+          [
+            4,
+            9
+          ]
+        ],
+        [
+          [
+            3,
+            12
+          ],
+          [
+            4,
+            12
+          ]
+        ],
+        [
+          [
+            1,
+            2
+          ],
+          [
+            4,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 22,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 23,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 25,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 23,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 26,
+              "processing_energy": 7
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 29,
+              "processing_energy": 7
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 13,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 26,
+              "processing_energy": 12
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 24,
+              "processing_energy": 12
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 26,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 25,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 1,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_GLOSS_BLACK",
+        "roof_color": "M3_BASECOAT_GLOSS_BLACK",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 2880.0,
+      "stamping_energy": 60.766666666666666,
+      "time_ratio": 0.6505337519118214,
+      "energy_ratio": 0.6980609494959942,
+      "target_processing_time": 150,
+      "target_processing_energy": 41,
+      "raw_tasks": [
+        [
+          [
+            2,
+            26
+          ],
+          [
+            3,
+            23
+          ],
+          [
+            5,
+            30
+          ]
+        ],
+        [
+          [
+            2,
+            25
+          ],
+          [
+            4,
+            22
+          ],
+          [
+            5,
+            29
+          ]
+        ],
+        [
+          [
+            3,
+            24
+          ]
+        ],
+        [
+          [
+            3,
+            23
+          ]
+        ],
+        [
+          [
+            4,
+            27
+          ],
+          [
+            5,
+            28
+          ]
+        ],
+        [
+          [
+            1,
+            22
+          ],
+          [
+            2,
+            25
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            2,
+            2
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ],
+        [
+          [
+            2,
+            9
+          ],
+          [
+            4,
+            9
+          ],
+          [
+            5,
+            10
+          ]
+        ],
+        [
+          [
+            3,
+            10
+          ]
+        ],
+        [
+          [
+            3,
+            7
+          ]
+        ],
+        [
+          [
+            4,
+            12
+          ],
+          [
+            5,
+            13
+          ]
+        ],
+        [
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 26,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 23,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 30,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 25,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 22,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 29,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 24,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 23,
+              "processing_energy": 7
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 27,
+              "processing_energy": 12
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 13
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 22,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 25,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 2,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 2285.0,
+      "stamping_energy": 58.333333333333336,
+      "time_ratio": 0.6734012691844569,
+      "energy_ratio": 0.683910928305404,
+      "target_processing_time": 150,
+      "target_processing_energy": 39,
+      "raw_tasks": [
+        [
+          [
+            2,
+            29
+          ]
+        ],
+        [
+          [
+            1,
+            23
+          ]
+        ],
+        [
+          [
+            2,
+            28
+          ],
+          [
+            3,
+            24
+          ],
+          [
+            5,
+            27
+          ]
+        ],
+        [
+          [
+            1,
+            27
+          ],
+          [
+            4,
+            24
+          ]
+        ],
+        [
+          [
+            2,
+            23
+          ]
+        ],
+        [
+          [
+            1,
+            25
+          ],
+          [
+            3,
+            29
+          ],
+          [
+            5,
+            22
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            2,
+            2
+          ]
+        ],
+        [
+          [
+            1,
+            8
+          ]
+        ],
+        [
+          [
+            2,
+            8
+          ],
+          [
+            3,
+            8
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        [
+          [
+            1,
+            8
+          ],
+          [
+            4,
+            7
+          ]
+        ],
+        [
+          [
+            2,
+            11
+          ]
+        ],
+        [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 29,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 23,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 28,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 24,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 27,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 27,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 24,
+              "processing_energy": 7
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 23,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 25,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 29,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 22,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 3,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "roof_color": "M3_BASECOAT_GLOSS_BLACK",
+        "two_tone": true,
+        "synthetic": true
+      },
+      "stamping_time": 2700.0,
+      "stamping_energy": 55.75,
+      "time_ratio": 0.6686197516011506,
+      "energy_ratio": 0.7082615654236025,
+      "target_processing_time": 150,
+      "target_processing_energy": 41,
+      "raw_tasks": [
+        [
+          [
+            3,
+            28
+          ]
+        ],
+        [
+          [
+            3,
+            25
+          ],
+          [
+            4,
+            28
+          ],
+          [
+            5,
+            29
+          ]
+        ],
+        [
+          [
+            3,
+            27
+          ]
+        ],
+        [
+          [
+            3,
+            28
+          ]
+        ],
+        [
+          [
+            4,
+            29
+          ]
+        ],
+        [
+          [
+            2,
+            23
+          ],
+          [
+            5,
+            26
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            3,
+            2
+          ]
+        ],
+        [
+          [
+            3,
+            8
+          ],
+          [
+            4,
+            10
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        [
+          [
+            3,
+            10
+          ]
+        ],
+        [
+          [
+            3,
+            6
+          ]
+        ],
+        [
+          [
+            4,
+            11
+          ]
+        ],
+        [
+          [
+            2,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 28,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 25,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 29,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 27,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 28,
+              "processing_energy": 6
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 29,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 23,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 26,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 4,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 1683.0,
+      "stamping_energy": 58.666666666666664,
+      "time_ratio": 0.6668514806947473,
+      "energy_ratio": 0.7255119825136261,
+      "target_processing_time": 150,
+      "target_processing_energy": 42,
+      "raw_tasks": [
+        [
+          [
+            2,
+            23
+          ],
+          [
+            3,
+            26
+          ],
+          [
+            4,
+            24
+          ]
+        ],
+        [
+          [
+            1,
+            23
+          ],
+          [
+            3,
+            29
+          ],
+          [
+            5,
+            25
+          ]
+        ],
+        [
+          [
+            2,
+            25
+          ],
+          [
+            4,
+            21
+          ],
+          [
+            5,
+            30
+          ]
+        ],
+        [
+          [
+            1,
+            25
+          ]
+        ],
+        [
+          [
+            5,
+            23
+          ]
+        ],
+        [
+          [
+            2,
+            22
+          ],
+          [
+            5,
+            25
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            2,
+            2
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            4,
+            2
+          ]
+        ],
+        [
+          [
+            1,
+            10
+          ],
+          [
+            3,
+            11
+          ],
+          [
+            5,
+            10
+          ]
+        ],
+        [
+          [
+            2,
+            9
+          ],
+          [
+            4,
+            10
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        [
+          [
+            1,
+            8
+          ]
+        ],
+        [
+          [
+            5,
+            12
+          ]
+        ],
+        [
+          [
+            2,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 23,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 26,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 24,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 23,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 29,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 25,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 21,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 30,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 25,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 23,
+              "processing_energy": 12
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 22,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 5,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_SKY_GRAY",
+        "roof_color": "M3_BASECOAT_GLOSS_BLACK",
+        "two_tone": true,
+        "synthetic": true
+      },
+      "stamping_time": 3058.0,
+      "stamping_energy": 57.083333333333336,
+      "time_ratio": 0.6469430312076381,
+      "energy_ratio": 0.6736399354105728,
+      "target_processing_time": 150,
+      "target_processing_energy": 38,
+      "raw_tasks": [
+        [
+          [
+            1,
+            23
+          ],
+          [
+            4,
+            23
+          ]
+        ],
+        [
+          [
+            3,
+            26
+          ],
+          [
+            5,
+            26
+          ]
+        ],
+        [
+          [
+            5,
+            22
+          ]
+        ],
+        [
+          [
+            1,
+            26
+          ],
+          [
+            3,
+            23
+          ]
+        ],
+        [
+          [
+            1,
+            29
+          ],
+          [
+            5,
+            23
+          ]
+        ],
+        [
+          [
+            1,
+            29
+          ],
+          [
+            2,
+            23
+          ],
+          [
+            4,
+            24
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            4,
+            2
+          ]
+        ],
+        [
+          [
+            3,
+            8
+          ],
+          [
+            5,
+            10
+          ]
+        ],
+        [
+          [
+            5,
+            9
+          ]
+        ],
+        [
+          [
+            1,
+            6
+          ],
+          [
+            3,
+            7
+          ]
+        ],
+        [
+          [
+            1,
+            10
+          ],
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            4,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 23,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 23,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 26,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 26,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 22,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 6,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 26,
+              "processing_energy": 6
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 23,
+              "processing_energy": 7
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 29,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 23,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 29,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 23,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 24,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 6,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 2914.0,
+      "stamping_energy": 67.33333333333334,
+      "time_ratio": 0.6352091775893887,
+      "energy_ratio": 0.7165191136939535,
+      "target_processing_time": 150,
+      "target_processing_energy": 50,
+      "raw_tasks": [
+        [
+          [
+            1,
+            27
+          ],
+          [
+            2,
+            23
+          ],
+          [
+            5,
+            23
+          ]
+        ],
+        [
+          [
+            5,
+            27
+          ]
+        ],
+        [
+          [
+            2,
+            24
+          ],
+          [
+            4,
+            25
+          ],
+          [
+            5,
+            25
+          ]
+        ],
+        [
+          [
+            1,
+            27
+          ],
+          [
+            3,
+            27
+          ],
+          [
+            4,
+            25
+          ]
+        ],
+        [
+          [
+            1,
+            28
+          ],
+          [
+            2,
+            27
+          ],
+          [
+            4,
+            29
+          ]
+        ],
+        [
+          [
+            4,
+            27
+          ],
+          [
+            5,
+            21
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ],
+        [
+          [
+            5,
+            12
+          ]
+        ],
+        [
+          [
+            2,
+            12
+          ],
+          [
+            4,
+            11
+          ],
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            1,
+            8
+          ],
+          [
+            3,
+            8
+          ],
+          [
+            4,
+            10
+          ]
+        ],
+        [
+          [
+            1,
+            13
+          ],
+          [
+            2,
+            15
+          ],
+          [
+            4,
+            15
+          ]
+        ],
+        [
+          [
+            4,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 27,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 23,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 23,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 27,
+              "processing_energy": 12
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 24,
+              "processing_energy": 12
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 25,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 27,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 27,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 25,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 14,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 28,
+              "processing_energy": 13
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 27,
+              "processing_energy": 15
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 29,
+              "processing_energy": 15
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 27,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 21,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 7,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "roof_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 3425.0,
+      "stamping_energy": 46.16666666666667,
+      "time_ratio": 0.646130430967796,
+      "energy_ratio": 0.679077181321912,
+      "target_processing_time": 150,
+      "target_processing_energy": 31,
+      "raw_tasks": [
+        [
+          [
+            1,
+            24
+          ],
+          [
+            2,
+            25
+          ],
+          [
+            5,
+            25
+          ]
+        ],
+        [
+          [
+            1,
+            22
+          ],
+          [
+            4,
+            23
+          ]
+        ],
+        [
+          [
+            1,
+            27
+          ],
+          [
+            3,
+            26
+          ]
+        ],
+        [
+          [
+            1,
+            27
+          ]
+        ],
+        [
+          [
+            1,
+            27
+          ]
+        ],
+        [
+          [
+            2,
+            27
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ],
+        [
+          [
+            1,
+            7
+          ],
+          [
+            4,
+            6
+          ]
+        ],
+        [
+          [
+            1,
+            6
+          ],
+          [
+            3,
+            7
+          ]
+        ],
+        [
+          [
+            1,
+            5
+          ]
+        ],
+        [
+          [
+            1,
+            10
+          ]
+        ],
+        [
+          [
+            2,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 24,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 25,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 22,
+              "processing_energy": 7
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 23,
+              "processing_energy": 6
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 6,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 27,
+              "processing_energy": 6
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 26,
+              "processing_energy": 7
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 5,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 27,
+              "processing_energy": 5
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 27,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 27,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 8,
+      "variant": {
+        "powertrain_type": "HEV",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_GLOSS_BLACK",
+        "roof_color": "M3_BASECOAT_GLOSS_BLACK",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 3648.0,
+      "stamping_energy": 69.16666666666666,
+      "time_ratio": 0.6653921238749249,
+      "energy_ratio": 0.7087105013715437,
+      "target_processing_time": 150,
+      "target_processing_energy": 50,
+      "raw_tasks": [
+        [
+          [
+            2,
+            28
+          ],
+          [
+            3,
+            25
+          ]
+        ],
+        [
+          [
+            4,
+            28
+          ]
+        ],
+        [
+          [
+            1,
+            25
+          ],
+          [
+            5,
+            28
+          ]
+        ],
+        [
+          [
+            2,
+            29
+          ],
+          [
+            5,
+            22
+          ]
+        ],
+        [
+          [
+            2,
+            27
+          ],
+          [
+            3,
+            25
+          ],
+          [
+            4,
+            24
+          ]
+        ],
+        [
+          [
+            3,
+            22
+          ],
+          [
+            4,
+            27
+          ],
+          [
+            5,
+            27
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            2,
+            2
+          ],
+          [
+            3,
+            2
+          ]
+        ],
+        [
+          [
+            4,
+            13
+          ]
+        ],
+        [
+          [
+            1,
+            12
+          ],
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            2,
+            9
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        [
+          [
+            2,
+            15
+          ],
+          [
+            3,
+            14
+          ],
+          [
+            4,
+            16
+          ]
+        ],
+        [
+          [
+            3,
+            2
+          ],
+          [
+            4,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 28,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 25,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 13
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 25,
+              "processing_energy": 12
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 29,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 22,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 14,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 27,
+              "processing_energy": 15
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 25,
+              "processing_energy": 14
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 24,
+              "processing_energy": 16
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 22,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 27,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 27,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 9,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 4037.0,
+      "stamping_energy": 69.41666666666666,
+      "time_ratio": 0.6387174779311644,
+      "energy_ratio": 0.6882044438684684,
+      "target_processing_time": 150,
+      "target_processing_energy": 48,
+      "raw_tasks": [
+        [
+          [
+            1,
+            22
+          ]
+        ],
+        [
+          [
+            1,
+            29
+          ],
+          [
+            2,
+            24
+          ]
+        ],
+        [
+          [
+            1,
+            24
+          ],
+          [
+            2,
+            22
+          ]
+        ],
+        [
+          [
+            2,
+            24
+          ]
+        ],
+        [
+          [
+            1,
+            22
+          ]
+        ],
+        [
+          [
+            1,
+            23
+          ],
+          [
+            2,
+            26
+          ],
+          [
+            3,
+            22
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            1,
+            2
+          ]
+        ],
+        [
+          [
+            1,
+            11
+          ],
+          [
+            2,
+            10
+          ]
+        ],
+        [
+          [
+            1,
+            11
+          ],
+          [
+            2,
+            11
+          ]
+        ],
+        [
+          [
+            2,
+            9
+          ]
+        ],
+        [
+          [
+            1,
+            15
+          ]
+        ],
+        [
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            3,
+            2
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "W0",
+          "operation_type": "PANEL_KITTING",
+          "description": "冲压件齐套、定位和夹紧",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 22,
+              "processing_energy": 2
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "W1",
+          "operation_type": "BODY_SPOT_WELD",
+          "description": "车身主结构电阻点焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 29,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 24,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "W2",
+          "operation_type": "MIG_LASER_BRAZING",
+          "description": "局部填充焊或激光钎焊",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 24,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 22,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "W3",
+          "operation_type": "STRUCTURAL_ADHESIVE",
+          "description": "结构胶和折边胶",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 24,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "W4",
+          "operation_type": "MECHANICAL_JOIN_AND_SEAL",
+          "description": "铆接、螺柱、螺栓和密封",
+          "base_processing_time": 25,
+          "base_processing_energy": 14,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 22,
+              "processing_energy": 15
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "W5",
+          "operation_type": "BODY_INSPECTION",
+          "description": "连接质量和尺寸检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 2,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 23,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 26,
+              "processing_energy": 2
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 22,
+              "processing_energy": 2
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "transport_time": [
+    [
+      0,
+      3,
+      2,
+      2,
+      1
+    ],
+    [
+      3,
+      0,
+      2,
+      3,
+      1
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      1
+    ],
+    [
+      2,
+      3,
+      3,
+      0,
+      3
+    ],
+    [
+      1,
+      1,
+      1,
+      3,
+      0
+    ]
+  ],
+  "transport_energy": [
+    [
+      0,
+      2,
+      2,
+      4,
+      4
+    ],
+    [
+      2,
+      0,
+      6,
+      2,
+      2
+    ],
+    [
+      2,
+      6,
+      0,
+      2,
+      5
+    ],
+    [
+      4,
+      2,
+      2,
+      0,
+      6
+    ],
+    [
+      4,
+      2,
+      5,
+      6,
+      0
+    ]
+  ]
+}

@@ -7,6 +7,7 @@ from simulator.dataset import (
     DatasetValidationError,
     get_dataset_source,
     list_dataset_sources,
+    load_model_additional_text,
     load_multi_objective_dataset,
 )
 
@@ -17,6 +18,11 @@ class MultiObjectiveDatasetTest(unittest.TestCase):
         config = load_simulator_config()
         cls.raw_path = Path(config["paths"]["input_file"])
         cls.additional_path = Path(config["paths"]["additional_file"])
+        cls.delivery_path = (
+            Path("datasets")
+            / "delivery_cost"
+            / cls.raw_path.name
+        )
         cls.dataset = load_multi_objective_dataset(
             cls.raw_path,
             cls.additional_path,
@@ -34,13 +40,17 @@ class MultiObjectiveDatasetTest(unittest.TestCase):
         )
 
         first_job = dataset.jobs[0]
-        self.assertEqual(first_job.weight, 5)
-        self.assertEqual(first_job.ready_time, 6)
-        self.assertEqual(first_job.due_time, 151)
-        self.assertEqual(first_job.earliness_cost, 2)
-        self.assertEqual(first_job.tardiness_cost, 2)
+        self.assertIn(first_job.weight, range(1, 6))
+        self.assertIn(first_job.ready_time, range(0, 21))
+        self.assertGreater(first_job.due_time, first_job.ready_time)
+        self.assertIn(first_job.earliness_cost, range(1, 11))
+        self.assertIn(first_job.tardiness_cost, range(1, 11))
         self.assertEqual(first_job.release_time, first_job.ready_time)
         self.assertEqual(first_job.due_date, first_job.due_time)
+        self.assertEqual(
+            dataset.delivery_cost_path,
+            self.delivery_path,
+        )
 
     def test_tasks_contain_machine_time_and_energy_fields(self):
         for job in self.dataset.jobs:
@@ -80,11 +90,50 @@ class MultiObjectiveDatasetTest(unittest.TestCase):
                         matrix[column_index][row_index],
                     )
 
+    def test_delivery_fields_are_merged_for_model_input(self):
+        merged = load_model_additional_text(
+            self.raw_path,
+            self.additional_path,
+            self.delivery_path,
+        )
+        lines = [line for line in merged.splitlines() if line.strip()]
+        add_lines = [
+            line
+            for line in self.additional_path.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        delivery_lines = [
+            line
+            for line in self.delivery_path.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+
+        self.assertEqual(
+            len(lines),
+            len(add_lines) + len(delivery_lines),
+        )
+        self.assertEqual(
+            lines[self.dataset.num_jobs:self.dataset.num_jobs * 2],
+            delivery_lines,
+        )
+
     def test_missing_additional_file_is_rejected(self):
         with self.assertRaises(DatasetValidationError):
             load_multi_objective_dataset(
                 self.raw_path,
                 Path("datasets/add/not-found.fjs"),
+            )
+
+    def test_missing_delivery_cost_file_is_rejected(self):
+        with self.assertRaises(DatasetValidationError):
+            load_multi_objective_dataset(
+                self.raw_path,
+                self.additional_path,
+                Path("datasets/delivery_cost/not-found.fjs"),
             )
 
     def test_machine_mismatch_is_rejected(self):
@@ -127,7 +176,18 @@ class MultiObjectiveDatasetTest(unittest.TestCase):
         add_names = {
             path.name for path in (dataset_root / "add").glob("*.fjs")
         }
+        delivery_names = {
+            path.name
+            for path in (
+                dataset_root
+                / "delivery_cost"
+            ).glob("*.fjs")
+        }
         self.assertEqual(len(sources), len(raw_names & add_names))
+        self.assertEqual(
+            len(sources),
+            len(raw_names & add_names & delivery_names),
+        )
         self.assertGreater(len(sources), 0)
         default_sources = [
             source for source in sources if source["is_default"]
@@ -136,6 +196,12 @@ class MultiObjectiveDatasetTest(unittest.TestCase):
         self.assertEqual(
             default_sources[0]["id"],
             self.raw_path.stem,
+        )
+        self.assertTrue(
+            default_sources[0]["delivery_cost_file"].endswith(
+                "delivery_cost/"
+                + self.raw_path.name
+            )
         )
 
     def test_dataset_catalog_lookup_rejects_unknown_id(self):

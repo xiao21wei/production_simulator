@@ -326,7 +326,10 @@ class MachineAnomalyTest(unittest.TestCase):
             actual_start + degraded_processing_time,
         )
 
-        self._advance_to(simulator, recovery_time)
+        self._advance_to(
+            simulator,
+            max(recovery_time, task.planned_end),
+        )
 
         self.assertEqual(
             task.actual_end - actual_start,
@@ -375,6 +378,7 @@ class MachineAnomalyTest(unittest.TestCase):
             speed=5,
             realtime=False,
             scheduler_factory=FakeScheduler,
+            anomaly_handling_enabled=True,
         )
         manager.simulator = simulator
         manager.selected_source = manager.datasets_by_id[
@@ -495,6 +499,7 @@ class MachineAnomalyTest(unittest.TestCase):
             speed=5,
             realtime=False,
             scheduler_factory=FakeScheduler,
+            anomaly_handling_enabled=True,
         )
         manager.simulator = simulator
         manager.selected_source = manager.datasets_by_id[

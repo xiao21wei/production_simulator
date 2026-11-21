@@ -1,0 +1,2414 @@
+{
+  "format_version": 1,
+  "instance": "fjsp.hurink.edata-orb02.m10j10c2.fjs",
+  "process_id": 3,
+  "process_name": "涂装",
+  "num_jobs": 10,
+  "num_machines": 6,
+  "num_operations": 60,
+  "rules": {
+    "deterministic_seed": "sha256(instance, process, job, version)",
+    "processing_energy_unit": "energy_unit",
+    "transport_energy_unit": "energy_unit",
+    "fixed_task_count": 6,
+    "time_ratio_range": [
+      0.4,
+      0.65
+    ],
+    "time_ratio_default": 0.5,
+    "energy_ratio_range": [
+      0.45,
+      0.75
+    ],
+    "energy_ratio_default": 0.58,
+    "machine_speed_factor_range": [
+      0.9,
+      1.15
+    ],
+    "machine_energy_factor_range": [
+      0.92,
+      1.12
+    ]
+  },
+  "jobs": [
+    {
+      "job_id": 0,
+      "variant": {
+        "powertrain_type": "BEV",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 614.0,
+      "stamping_energy": 106.0,
+      "time_ratio": 0.48946871320745666,
+      "energy_ratio": 0.5973595001074832,
+      "target_processing_time": 150,
+      "target_processing_energy": 63,
+      "raw_tasks": [
+        [
+          [
+            3,
+            23
+          ],
+          [
+            4,
+            28
+          ]
+        ],
+        [
+          [
+            6,
+            28
+          ]
+        ],
+        [
+          [
+            3,
+            25
+          ],
+          [
+            4,
+            27
+          ]
+        ],
+        [
+          [
+            1,
+            25
+          ],
+          [
+            6,
+            27
+          ]
+        ],
+        [
+          [
+            3,
+            25
+          ]
+        ],
+        [
+          [
+            5,
+            25
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            3,
+            11
+          ],
+          [
+            4,
+            11
+          ]
+        ],
+        [
+          [
+            6,
+            13
+          ]
+        ],
+        [
+          [
+            3,
+            11
+          ],
+          [
+            4,
+            10
+          ]
+        ],
+        [
+          [
+            1,
+            13
+          ],
+          [
+            6,
+            12
+          ]
+        ],
+        [
+          [
+            3,
+            11
+          ]
+        ],
+        [
+          [
+            5,
+            7
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 23,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 13,
+          "machine_options": [
+            {
+              "machine_id": 6,
+              "processing_time": 28,
+              "processing_energy": 13
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 25,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 27,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 13,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 25,
+              "processing_energy": 13
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 27,
+              "processing_energy": 12
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 25,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 1,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 556.0,
+      "stamping_energy": 125.0,
+      "time_ratio": 0.5068452154910397,
+      "energy_ratio": 0.5509710711118023,
+      "target_processing_time": 150,
+      "target_processing_energy": 70,
+      "raw_tasks": [
+        [
+          [
+            1,
+            24
+          ],
+          [
+            5,
+            29
+          ]
+        ],
+        [
+          [
+            2,
+            28
+          ],
+          [
+            5,
+            25
+          ]
+        ],
+        [
+          [
+            2,
+            24
+          ],
+          [
+            6,
+            28
+          ]
+        ],
+        [
+          [
+            1,
+            23
+          ]
+        ],
+        [
+          [
+            5,
+            28
+          ],
+          [
+            6,
+            26
+          ]
+        ],
+        [
+          [
+            4,
+            28
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            1,
+            10
+          ],
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            2,
+            15
+          ],
+          [
+            5,
+            17
+          ]
+        ],
+        [
+          [
+            2,
+            12
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        [
+          [
+            1,
+            15
+          ]
+        ],
+        [
+          [
+            5,
+            12
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        [
+          [
+            4,
+            8
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 24,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 29,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 15,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 28,
+              "processing_energy": 15
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 17
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 24,
+              "processing_energy": 12
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 28,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 14,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 23,
+              "processing_energy": 15
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 12
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 26,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 8
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 2,
+      "variant": {
+        "powertrain_type": "HEV",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 380.0,
+      "stamping_energy": 91.0,
+      "time_ratio": 0.5230285420829555,
+      "energy_ratio": 0.5559149803776787,
+      "target_processing_time": 150,
+      "target_processing_energy": 51,
+      "raw_tasks": [
+        [
+          [
+            5,
+            27
+          ],
+          [
+            6,
+            25
+          ]
+        ],
+        [
+          [
+            4,
+            27
+          ]
+        ],
+        [
+          [
+            4,
+            24
+          ],
+          [
+            5,
+            24
+          ]
+        ],
+        [
+          [
+            1,
+            23
+          ],
+          [
+            5,
+            24
+          ]
+        ],
+        [
+          [
+            2,
+            28
+          ],
+          [
+            4,
+            28
+          ]
+        ],
+        [
+          [
+            5,
+            24
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            5,
+            9
+          ],
+          [
+            6,
+            8
+          ]
+        ],
+        [
+          [
+            4,
+            11
+          ]
+        ],
+        [
+          [
+            4,
+            8
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        [
+          [
+            1,
+            10
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        [
+          [
+            2,
+            8
+          ],
+          [
+            4,
+            8
+          ]
+        ],
+        [
+          [
+            5,
+            6
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 27,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 25,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 27,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 24,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 24,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 23,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 24,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 28,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 6,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 24,
+              "processing_energy": 6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 3,
+      "variant": {
+        "powertrain_type": "HEV",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_SKY_GRAY",
+        "roof_color": "M3_BASECOAT_SKY_GRAY",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 412.0,
+      "stamping_energy": 102.0,
+      "time_ratio": 0.5167938108766281,
+      "energy_ratio": 0.5803585457855007,
+      "target_processing_time": 150,
+      "target_processing_energy": 61,
+      "raw_tasks": [
+        [
+          [
+            1,
+            24
+          ]
+        ],
+        [
+          [
+            2,
+            25
+          ]
+        ],
+        [
+          [
+            5,
+            27
+          ]
+        ],
+        [
+          [
+            5,
+            28
+          ]
+        ],
+        [
+          [
+            4,
+            28
+          ]
+        ],
+        [
+          [
+            1,
+            27
+          ],
+          [
+            5,
+            23
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            1,
+            11
+          ]
+        ],
+        [
+          [
+            2,
+            12
+          ]
+        ],
+        [
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            5,
+            13
+          ]
+        ],
+        [
+          [
+            4,
+            9
+          ]
+        ],
+        [
+          [
+            1,
+            7
+          ],
+          [
+            5,
+            7
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 24,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 13,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 25,
+              "processing_energy": 12
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 27,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 13
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 27,
+              "processing_energy": 7
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 23,
+              "processing_energy": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 4,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_SKY_GRAY",
+        "roof_color": "M3_BASECOAT_GLOSS_BLACK",
+        "two_tone": true,
+        "synthetic": true
+      },
+      "stamping_time": 542.0,
+      "stamping_energy": 91.5,
+      "time_ratio": 0.47369638299941746,
+      "energy_ratio": 0.5989853133976804,
+      "target_processing_time": 150,
+      "target_processing_energy": 58,
+      "raw_tasks": [
+        [
+          [
+            4,
+            28
+          ]
+        ],
+        [
+          [
+            4,
+            25
+          ],
+          [
+            6,
+            26
+          ]
+        ],
+        [
+          [
+            1,
+            26
+          ],
+          [
+            3,
+            28
+          ]
+        ],
+        [
+          [
+            2,
+            27
+          ],
+          [
+            5,
+            26
+          ]
+        ],
+        [
+          [
+            4,
+            25
+          ]
+        ],
+        [
+          [
+            4,
+            25
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            4,
+            10
+          ]
+        ],
+        [
+          [
+            4,
+            14
+          ],
+          [
+            6,
+            14
+          ]
+        ],
+        [
+          [
+            1,
+            9
+          ],
+          [
+            3,
+            10
+          ]
+        ],
+        [
+          [
+            2,
+            11
+          ],
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            4,
+            8
+          ]
+        ],
+        [
+          [
+            4,
+            6
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 13,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 25,
+              "processing_energy": 14
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 26,
+              "processing_energy": 14
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 26,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 28,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 27,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 26,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 25,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 6,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 25,
+              "processing_energy": 6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 5,
+      "variant": {
+        "powertrain_type": "HEV",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "roof_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 578.0,
+      "stamping_energy": 88.5,
+      "time_ratio": 0.47793975747027,
+      "energy_ratio": 0.5716765071938704,
+      "target_processing_time": 150,
+      "target_processing_energy": 52,
+      "raw_tasks": [
+        [
+          [
+            5,
+            25
+          ]
+        ],
+        [
+          [
+            5,
+            25
+          ]
+        ],
+        [
+          [
+            4,
+            29
+          ],
+          [
+            5,
+            28
+          ]
+        ],
+        [
+          [
+            4,
+            27
+          ],
+          [
+            6,
+            24
+          ]
+        ],
+        [
+          [
+            2,
+            28
+          ],
+          [
+            5,
+            25
+          ]
+        ],
+        [
+          [
+            1,
+            24
+          ],
+          [
+            5,
+            23
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            5,
+            7
+          ]
+        ],
+        [
+          [
+            5,
+            10
+          ]
+        ],
+        [
+          [
+            4,
+            9
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        [
+          [
+            4,
+            11
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        [
+          [
+            2,
+            8
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        [
+          [
+            1,
+            7
+          ],
+          [
+            5,
+            6
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 7
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 29,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 27,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 24,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 28,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 6,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 24,
+              "processing_energy": 7
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 23,
+              "processing_energy": 6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 6,
+      "variant": {
+        "powertrain_type": "BEV",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "roof_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 620.0,
+      "stamping_energy": 92.0,
+      "time_ratio": 0.5111869564487697,
+      "energy_ratio": 0.5840004625402573,
+      "target_processing_time": 150,
+      "target_processing_energy": 53,
+      "raw_tasks": [
+        [
+          [
+            1,
+            25
+          ],
+          [
+            5,
+            28
+          ]
+        ],
+        [
+          [
+            6,
+            23
+          ]
+        ],
+        [
+          [
+            2,
+            28
+          ],
+          [
+            3,
+            27
+          ]
+        ],
+        [
+          [
+            3,
+            23
+          ]
+        ],
+        [
+          [
+            1,
+            25
+          ],
+          [
+            3,
+            25
+          ]
+        ],
+        [
+          [
+            2,
+            26
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            1,
+            9
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        [
+          [
+            6,
+            12
+          ]
+        ],
+        [
+          [
+            2,
+            9
+          ],
+          [
+            3,
+            8
+          ]
+        ],
+        [
+          [
+            3,
+            11
+          ]
+        ],
+        [
+          [
+            1,
+            8
+          ],
+          [
+            3,
+            9
+          ]
+        ],
+        [
+          [
+            2,
+            6
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 25,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 6,
+              "processing_time": 23,
+              "processing_energy": 12
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 28,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 27,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 23,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 25,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 25,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 6,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 26,
+              "processing_energy": 6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 7,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "2WD",
+        "body_color": "M3_BASECOAT_SKY_GRAY",
+        "roof_color": "M3_BASECOAT_SKY_GRAY",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 544.0,
+      "stamping_energy": 99.0,
+      "time_ratio": 0.5238710599762059,
+      "energy_ratio": 0.555229856998749,
+      "target_processing_time": 150,
+      "target_processing_energy": 52,
+      "raw_tasks": [
+        [
+          [
+            2,
+            25
+          ],
+          [
+            3,
+            27
+          ]
+        ],
+        [
+          [
+            2,
+            27
+          ],
+          [
+            4,
+            25
+          ]
+        ],
+        [
+          [
+            4,
+            29
+          ]
+        ],
+        [
+          [
+            5,
+            25
+          ],
+          [
+            6,
+            25
+          ]
+        ],
+        [
+          [
+            4,
+            28
+          ],
+          [
+            5,
+            24
+          ]
+        ],
+        [
+          [
+            2,
+            26
+          ],
+          [
+            5,
+            24
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            2,
+            8
+          ],
+          [
+            3,
+            8
+          ]
+        ],
+        [
+          [
+            2,
+            11
+          ],
+          [
+            4,
+            11
+          ]
+        ],
+        [
+          [
+            4,
+            8
+          ]
+        ],
+        [
+          [
+            5,
+            11
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        [
+          [
+            4,
+            8
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        [
+          [
+            2,
+            7
+          ],
+          [
+            5,
+            6
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 25,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 3,
+              "processing_time": 27,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 27,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 4,
+              "processing_time": 25,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 29,
+              "processing_energy": 8
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 11
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 25,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 8,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 28,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 24,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 6,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 26,
+              "processing_energy": 7
+            },
+            {
+              "machine_id": 5,
+              "processing_time": 24,
+              "processing_energy": 6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 8,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_FLYING_BLUE",
+        "roof_color": "M3_BASECOAT_FLYING_BLUE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 443.0,
+      "stamping_energy": 114.5,
+      "time_ratio": 0.5200922461688748,
+      "energy_ratio": 0.5839255121892528,
+      "target_processing_time": 150,
+      "target_processing_energy": 67,
+      "raw_tasks": [
+        [
+          [
+            5,
+            28
+          ]
+        ],
+        [
+          [
+            4,
+            27
+          ],
+          [
+            6,
+            25
+          ]
+        ],
+        [
+          [
+            3,
+            28
+          ],
+          [
+            6,
+            25
+          ]
+        ],
+        [
+          [
+            1,
+            25
+          ],
+          [
+            2,
+            24
+          ]
+        ],
+        [
+          [
+            6,
+            26
+          ]
+        ],
+        [
+          [
+            2,
+            26
+          ],
+          [
+            6,
+            28
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            4,
+            17
+          ],
+          [
+            6,
+            15
+          ]
+        ],
+        [
+          [
+            3,
+            9
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        [
+          [
+            1,
+            15
+          ],
+          [
+            2,
+            13
+          ]
+        ],
+        [
+          [
+            6,
+            10
+          ]
+        ],
+        [
+          [
+            2,
+            8
+          ],
+          [
+            6,
+            7
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 11,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 28,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 15,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 27,
+              "processing_energy": 17
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 25,
+              "processing_energy": 15
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 28,
+              "processing_energy": 9
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 25,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 14,
+          "machine_options": [
+            {
+              "machine_id": 1,
+              "processing_time": 25,
+              "processing_energy": 15
+            },
+            {
+              "machine_id": 2,
+              "processing_time": 24,
+              "processing_energy": 13
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 6,
+              "processing_time": 26,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 2,
+              "processing_time": 26,
+              "processing_energy": 8
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 28,
+              "processing_energy": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": 9,
+      "variant": {
+        "powertrain_type": "ICE",
+        "drive_type": "AWD",
+        "body_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "roof_color": "M3_BASECOAT_CRYSTAL_WHITE",
+        "two_tone": false,
+        "synthetic": true
+      },
+      "stamping_time": 566.0,
+      "stamping_energy": 106.5,
+      "time_ratio": 0.4995383489659295,
+      "energy_ratio": 0.5898456644859617,
+      "target_processing_time": 150,
+      "target_processing_energy": 60,
+      "raw_tasks": [
+        [
+          [
+            5,
+            25
+          ],
+          [
+            6,
+            24
+          ]
+        ],
+        [
+          [
+            4,
+            26
+          ]
+        ],
+        [
+          [
+            3,
+            23
+          ]
+        ],
+        [
+          [
+            6,
+            26
+          ]
+        ],
+        [
+          [
+            6,
+            27
+          ]
+        ],
+        [
+          [
+            4,
+            23
+          ],
+          [
+            6,
+            26
+          ]
+        ]
+      ],
+      "energy_tasks": [
+        [
+          [
+            5,
+            10
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        [
+          [
+            4,
+            14
+          ]
+        ],
+        [
+          [
+            3,
+            9
+          ]
+        ],
+        [
+          [
+            6,
+            12
+          ]
+        ],
+        [
+          [
+            6,
+            10
+          ]
+        ],
+        [
+          [
+            4,
+            7
+          ],
+          [
+            6,
+            7
+          ]
+        ]
+      ],
+      "tasks": [
+        {
+          "stage_operation_id": 0,
+          "task_code": "P0",
+          "operation_type": "PRETREAT_ECOAT",
+          "description": "前处理和阴极电泳",
+          "base_processing_time": 25,
+          "base_processing_energy": 10,
+          "machine_options": [
+            {
+              "machine_id": 5,
+              "processing_time": 25,
+              "processing_energy": 10
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 24,
+              "processing_energy": 11
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 1,
+          "task_code": "P1",
+          "operation_type": "SEAL_ANTI_CHIP_CAVITY",
+          "description": "密封、抗石击和空腔防腐",
+          "base_processing_time": 25,
+          "base_processing_energy": 13,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 26,
+              "processing_energy": 14
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 2,
+          "task_code": "P2",
+          "operation_type": "PRIMER",
+          "description": "底漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 3,
+              "processing_time": 23,
+              "processing_energy": 9
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 3,
+          "task_code": "P3",
+          "operation_type": "BASECOAT_COMBO",
+          "description": "车身和车顶面漆",
+          "base_processing_time": 25,
+          "base_processing_energy": 12,
+          "machine_options": [
+            {
+              "machine_id": 6,
+              "processing_time": 26,
+              "processing_energy": 12
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 4,
+          "task_code": "P4",
+          "operation_type": "CLEARCOAT",
+          "description": "清漆及固化剂",
+          "base_processing_time": 25,
+          "base_processing_energy": 9,
+          "machine_options": [
+            {
+              "machine_id": 6,
+              "processing_time": 27,
+              "processing_energy": 10
+            }
+          ]
+        },
+        {
+          "stage_operation_id": 5,
+          "task_code": "P5",
+          "operation_type": "BAKE_INSPECTION",
+          "description": "烘烤和检查",
+          "base_processing_time": 25,
+          "base_processing_energy": 7,
+          "machine_options": [
+            {
+              "machine_id": 4,
+              "processing_time": 23,
+              "processing_energy": 7
+            },
+            {
+              "machine_id": 6,
+              "processing_time": 26,
+              "processing_energy": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "transport_time": [
+    [
+      0,
+      2,
+      3,
+      3,
+      3,
+      2
+    ],
+    [
+      2,
+      0,
+      5,
+      4,
+      5,
+      2
+    ],
+    [
+      3,
+      5,
+      0,
+      4,
+      3,
+      2
+    ],
+    [
+      3,
+      4,
+      4,
+      0,
+      5,
+      5
+    ],
+    [
+      3,
+      5,
+      3,
+      5,
+      0,
+      2
+    ],
+    [
+      2,
+      2,
+      2,
+      5,
+      2,
+      0
+    ]
+  ],
+  "transport_energy": [
+    [
+      0,
+      6,
+      7,
+      5,
+      4,
+      6
+    ],
+    [
+      6,
+      0,
+      5,
+      7,
+      3,
+      3
+    ],
+    [
+      7,
+      5,
+      0,
+      4,
+      3,
+      4
+    ],
+    [
+      5,
+      7,
+      4,
+      0,
+      4,
+      4
+    ],
+    [
+      4,
+      3,
+      3,
+      4,
+      0,
+      6
+    ],
+    [
+      6,
+      3,
+      4,
+      4,
+      6,
+      0
+    ]
+  ]
+}

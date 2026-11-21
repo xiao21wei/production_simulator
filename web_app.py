@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import mimetypes
 import random
@@ -18,7 +19,10 @@ from simulator.anomaly import (
     MachineAnomalyType,
 )
 from simulator.detection_data import MachineDetectionDataProvider
-from simulator.dataset import list_dataset_sources
+from simulator.dataset import (
+    list_dataset_sources,
+    load_model_additional_text,
+)
 from simulator.event import (
     MachineAnomalyEvent,
     OrderCancelEvent,
@@ -59,11 +63,29 @@ EVENT_FIELDS = (
     "order_source",
     "job_count",
     "operation_id",
+    "from_stage",
+    "to_stage",
+    "stage_id",
+    "batch_window",
+    "job_ready_times",
+    "historical",
+    "transport_start",
+    "transport_end",
     "machine_id",
     "anomaly_type",
     "anomaly_started_at",
     "duration",
     "machine_status",
+    "required_materials",
+    "replenishment_materials",
+    "added_materials",
+    "shortage_materials",
+    "available_materials",
+    "replenishment_event_id",
+    "consumed_materials",
+    "lead_time",
+    "materials_before_recovery",
+    "target_materials",
 )
 
 
@@ -81,12 +103,40 @@ def serialize_event(event, simulator):
         event_data["processing_time"] = simulator.jobs[
             event.job_id
         ].operation_times[event.operation_id][event.machine_id]
+    if hasattr(event, "operation_id"):
+        try:
+            task = simulator.jobs[event.job_id].tasks[
+                event.operation_id
+            ]
+            event_data["stage_id"] = task.stage_id
+            event_data["stage_operation_id"] = (
+                task.stage_operation_id
+            )
+        except (AttributeError, IndexError, TypeError):
+            pass
 
     return event_data
 
 
 def serialize_plan(planned_operations):
     return [asdict(operation) for operation in planned_operations]
+
+
+def load_material_catalog(dataset_root):
+    path = Path(dataset_root) / "material_master.csv"
+    if not path.is_file():
+        return {}
+    catalog = {}
+    with path.open(newline="", encoding="utf-8") as source:
+        for row in csv.DictReader(source):
+            material_id = row.get("material_id")
+            if material_id:
+                catalog[material_id] = {
+                    "material_name": row.get("material_name", ""),
+                    "unit": row.get("unit", ""),
+                    "category": row.get("category", ""),
+                }
+    return catalog
 
 
 def serialize_job_states(simulator):
@@ -110,6 +160,32 @@ def serialize_job_states(simulator):
         completed_count = sum(
             task.status == "completed" for task in job.tasks
         )
+        stage_ids = []
+        for task in job.tasks:
+            stage_id = getattr(task, "stage_id", 1)
+            if stage_id not in stage_ids:
+                stage_ids.append(stage_id)
+        current_stage = stage_ids[-1] if stage_ids else 1
+        if not all_completed and not job.is_canceled:
+            unfinished_task = next(
+                (
+                    task
+                    for task in job.tasks
+                    if task.status != "completed"
+                ),
+                None,
+            )
+            if unfinished_task is not None:
+                current_stage = getattr(
+                    unfinished_task,
+                    "stage_id",
+                    1,
+                )
+        current_stage_tasks = [
+            task
+            for task in job.tasks
+            if getattr(task, "stage_id", 1) == current_stage
+        ]
         job_states.append(
             {
                 "job_id": job.job_id,
@@ -119,6 +195,12 @@ def serialize_job_states(simulator):
                 "current_operations": [
                     {
                         "operation_id": task.operation_id,
+                        "stage_id": getattr(task, "stage_id", 1),
+                        "stage_operation_id": getattr(
+                            task,
+                            "stage_operation_id",
+                            task.operation_id,
+                        ),
                         "machine_id": task.assigned_machine,
                     }
                     for task in processing_tasks
@@ -126,6 +208,13 @@ def serialize_job_states(simulator):
                 "canceled_at": job.canceled_at,
                 "completion_time": job.completion_time,
                 "priority": job.priority,
+                "current_stage": current_stage,
+                "stage_count": len(stage_ids),
+                "stage_operation_count": len(current_stage_tasks),
+                "stage_completed_operations": sum(
+                    task.status == "completed"
+                    for task in current_stage_tasks
+                ),
             }
         )
     return sorted(job_states, key=lambda item: item["job_id"])
@@ -188,7 +277,12 @@ def serialize_order_batches(simulator, job_states):
 
 
 class DashboardState:
-    def __init__(self, display_percent=100, speed=5.0):
+    def __init__(
+        self,
+        display_percent=100,
+        speed=5.0,
+        anomaly_handling_enabled=False,
+    ):
         self.lock = threading.RLock()
         self.status = "idle"
         self.generation = 0
@@ -205,16 +299,24 @@ class DashboardState:
         self.order_batches = []
         self.job_states = []
         self.machine_states = []
+        self.processes = []
+        self.process_plans = {}
+        self.process_machine_states = {}
+        self.material_catalog = {}
         self.objectives = {}
         self.selected_dataset = None
         self.error = None
         self.plan_revision = 0
+        self.plan_structure_signature = None
         self.display_percent = float(display_percent)
         self.auto_job_submission_enabled = False
         self.auto_job_submission_triggered = False
         self.auto_job_submission_count = 0
         self.auto_job_submission_threshold = None
         self.auto_machine_anomaly_enabled = False
+        self.anomaly_handling_enabled = bool(
+            anomaly_handling_enabled
+        )
         self.auto_machine_anomaly_count = 0
         self.next_auto_machine_anomaly_time = None
         self.last_auto_machine_anomaly = None
@@ -236,10 +338,14 @@ class DashboardState:
             self.order_batches = []
             self.job_states = []
             self.machine_states = []
+            self.processes = []
+            self.process_plans = {}
+            self.process_machine_states = {}
             self.objectives = {}
             self.selected_dataset = None
             self.error = None
             self.plan_revision = 0
+            self.plan_structure_signature = None
             self.auto_job_submission_triggered = False
             self.auto_job_submission_count = 0
             self.auto_job_submission_threshold = None
@@ -310,6 +416,10 @@ class DashboardState:
                 "order_batches": list(self.order_batches),
                 "job_states": list(self.job_states),
                 "machine_states": self.machine_states,
+                "processes": list(self.processes),
+                "process_plans": self.process_plans,
+                "process_machine_states": self.process_machine_states,
+                "material_catalog": self.material_catalog,
                 "objectives": self.objectives,
                 "selected_dataset": self.selected_dataset,
                 "error": self.error,
@@ -326,6 +436,9 @@ class DashboardState:
                     "next_time": self.next_auto_machine_anomaly_time,
                     "last": self.last_auto_machine_anomaly,
                 },
+                "anomaly_handling": {
+                    "enabled": self.anomaly_handling_enabled,
+                },
             }
 
     def _update_simulator(self, simulator):
@@ -334,8 +447,18 @@ class DashboardState:
         serialized_plan = serialize_plan(
             simulator.planned_operations
         )
-        if serialized_plan != self.plan:
-            self.plan = serialized_plan
+        self.plan = serialized_plan
+        structure_signature = tuple(
+            (
+                operation.get("job_id"),
+                operation.get("operation_id"),
+                operation.get("machine_id"),
+                operation.get("stage_id"),
+            )
+            for operation in serialized_plan
+        )
+        if structure_signature != self.plan_structure_signature:
+            self.plan_structure_signature = structure_signature
             self.plan_revision += 1
         self.finished_jobs = len(simulator.finished_queue)
         self.total_jobs = len(simulator.jobs)
@@ -374,9 +497,61 @@ class DashboardState:
                 "anomaly_started_at": machine.anomaly_started_at,
                 "recovery_time": machine.recovery_time,
                 "performance_factor": machine.performance_factor,
+                "materials": dict(
+                    getattr(machine, "materials", {}) or {}
+                ),
+                "stage_id": getattr(machine, "stage_id", 1),
+                "local_id": getattr(
+                    machine,
+                    "local_machine_id",
+                    machine.machine_id + 1,
+                ),
             }
             for machine in simulator.machines
         ]
+        process_definitions = getattr(
+            simulator,
+            "process_definitions",
+            [],
+        )
+        if process_definitions:
+            self.processes = []
+            self.process_plans = {}
+            self.process_machine_states = {}
+            for process in process_definitions:
+                stage_id = int(process["id"])
+                machine_ids = set(
+                    range(
+                        int(process["machine_offset"]),
+                        int(process["machine_offset"])
+                        + int(process["machine_count"]),
+                    )
+                )
+                process_job_count = sum(
+                    state["current_stage"] == stage_id
+                    for state in self.job_states
+                    if state["status"] == "processing"
+                )
+                self.processes.append(
+                    {
+                        **process,
+                        "active_job_count": process_job_count,
+                    }
+                )
+                self.process_plans[str(stage_id)] = [
+                    operation
+                    for operation in self.plan
+                    if int(operation.get("stage_id") or 0) == stage_id
+                ]
+                self.process_machine_states[str(stage_id)] = [
+                    machine
+                    for machine in self.machine_states
+                    if machine["id"] in machine_ids
+                ]
+        else:
+            self.processes = []
+            self.process_plans = {}
+            self.process_machine_states = {}
         self.objectives = dict(getattr(simulator, "objectives", {}))
 
 
@@ -390,6 +565,7 @@ class SimulationManager:
         realtime=None,
         scheduler_factory=None,
         hls_scheduler_factory=None,
+        anomaly_handling_enabled=None,
         log_dir=None,
     ):
         self.config_path = Path(config_path).resolve()
@@ -397,9 +573,19 @@ class SimulationManager:
         self.speed = float(speed)
         self.real_time_step = real_time_step
         self.realtime = realtime
+        configured_anomaly_handling = config.get(
+            "anomaly_handling",
+            {},
+        ).get("enabled", False)
+        self.anomaly_handling_enabled = (
+            configured_anomaly_handling
+            if anomaly_handling_enabled is None
+            else bool(anomaly_handling_enabled)
+        )
         self.state = DashboardState(
             display_percent,
             speed=self.speed,
+            anomaly_handling_enabled=self.anomaly_handling_enabled,
         )
         self.simulator = None
         self.selected_source = None
@@ -444,6 +630,9 @@ class SimulationManager:
         self.dataset_root = (
             self.config_path.parent / config["paths"]["dataset_root"]
         ).resolve()
+        self.state.material_catalog = load_material_catalog(
+            self.dataset_root
+        )
         self.log_dir = (
             Path(log_dir).resolve()
             if log_dir is not None
@@ -611,6 +800,11 @@ class SimulationManager:
                     "dataset_additional_file": self.selected_source[
                         "additional_file"
                     ],
+                    "dataset_delivery_cost_file": (
+                        self.selected_source.get(
+                            "delivery_cost_file"
+                        )
+                    ),
                     "config_path": str(self.config_path),
                     "speed": self.speed,
                     "real_time_step": self.real_time_step,
@@ -633,6 +827,8 @@ class SimulationManager:
             self.simulator.init(
                 file_path=self.selected_source["raw_file"],
                 additional_file_path=self.selected_source["additional_file"],
+                process_sources=self.selected_source.get("processes"),
+                process_chain=True,
             )
             self.simulator.event_lock = self.mutation_lock
             self.simulator.machine_recovery_reoptimizer = (
@@ -672,6 +868,19 @@ class SimulationManager:
                     handled = original_handle_event(event)
                     if handled is False:
                         return
+                    for materialized_event in getattr(
+                        event,
+                        "materialized_events",
+                        (),
+                    ):
+                        self.state.record_event(
+                            materialized_event,
+                            self.simulator,
+                        )
+                        self.run_logger.record_event(
+                            materialized_event,
+                            self.simulator,
+                        )
                     self.state.record_event(event, self.simulator)
                     self.run_logger.record_event(event, self.simulator)
                     self._maybe_auto_submit_jobs()
@@ -695,16 +904,31 @@ class SimulationManager:
         num_samples=1,
         seed=0,
         excluded_machines=None,
+        process_id=1,
     ):
         """Return DRL-scheduled machine assignments for unfinished work."""
         if self.selected_source is None:
             raise ValueError("No dataset has been selected.")
-        source = self.selected_source
+        process_id = int(process_id)
+        process_source = next(
+            (
+                source
+                for source in self.selected_source.get(
+                    "processes",
+                    [],
+                )
+                if int(source["id"]) == process_id
+            ),
+            None,
+        )
+        source = process_source or self.selected_source
         scheduler = self._get_scheduler()
         raw_text = Path(source["raw_file"]).read_text(encoding="utf-8")
-        additional_text = Path(
-            source["additional_file"]
-        ).read_text(encoding="utf-8")
+        additional_text = load_model_additional_text(
+            source["raw_file"],
+            source["additional_file"],
+            source.get("delivery_cost_file"),
+        )
         model_result = scheduler.predict(
             {
                 "raw_lines": raw_text,
@@ -715,18 +939,31 @@ class SimulationManager:
             }
         )
         assignments = {
-            (row["job_id"], row["operation_index"]): row[
-                "machine_id"
-            ]
+            (
+                row["job_id"],
+                next(
+                    task.operation_id
+                    for task in self.simulator.jobs[
+                        row["job_id"]
+                    ].tasks
+                    if (
+                        task.stage_id == process_id
+                        and task.stage_operation_id
+                        == row["operation_index"]
+                    )
+                ),
+            ): int(row["machine_id"])
+            + int(source.get("machine_offset", 0))
             for row in model_result["schedule"]
         }
         assignments = self._completeUnfinishedAssignments(
             assignments,
             excluded_machines=excluded_machines,
+            stage_ids={process_id},
         )
         return model_result, assignments
 
-    def reoptimize(self, num_samples=1, seed=0):
+    def reoptimize(self, num_samples=1, seed=0, process_id=1):
         """Use the mofjsp model to reassign all unfinished operations."""
         with self.mutation_lock:
             with self.state.lock:
@@ -742,6 +979,7 @@ class SimulationManager:
                     self._request_drl_assignments(
                         num_samples=num_samples,
                         seed=seed,
+                        process_id=process_id,
                     )
                 )
                 reoptimization = (
@@ -753,6 +991,7 @@ class SimulationManager:
                             self.simulator.pending_event_timestamp
                             or self.simulator.curr_time,
                         ),
+                        stage_ids={int(process_id)},
                     )
                 )
                 with self.state.lock:
@@ -788,6 +1027,7 @@ class SimulationManager:
                 "model": model_result.get("model"),
                 "num_samples": model_result.get("num_samples"),
                 "model_objectives": model_result.get("objectives"),
+                "process_ids": [int(process_id)],
                 **reoptimization,
             }
             if self.run_logger is not None:
@@ -802,7 +1042,7 @@ class SimulationManager:
                 )
             return response
 
-    def hls_reoptimize(self, seed=0, **hls_options):
+    def hls_reoptimize(self, seed=0, process_id=1, **hls_options):
         """
         Use HLS to optimize makespan and apply only its machine assignments.
 
@@ -816,7 +1056,19 @@ class SimulationManager:
                     raise ValueError("Simulation has not been started.")
                 if self.state.status != "running":
                     raise ValueError("Simulation must be running to reoptimize.")
-                source = self.selected_source
+                process_id = int(process_id)
+                process_source = next(
+                    (
+                        source
+                        for source in self.selected_source.get(
+                            "processes",
+                            [],
+                        )
+                        if int(source["id"]) == process_id
+                    ),
+                    None,
+                )
+                source = process_source or self.selected_source
                 self.state.status = "reoptimizing"
 
             self.simulator.pause()
@@ -825,9 +1077,11 @@ class SimulationManager:
                     "raw_lines": Path(source["raw_file"]).read_text(
                         encoding="utf-8"
                     ),
-                    "additional_lines": Path(
-                        source["additional_file"]
-                    ).read_text(encoding="utf-8"),
+                    "additional_lines": load_model_additional_text(
+                        source["raw_file"],
+                        source["additional_file"],
+                        source.get("delivery_cost_file"),
+                    ),
                     "instance_name": source["id"],
                     "seed": int(seed),
                 }
@@ -840,25 +1094,39 @@ class SimulationManager:
                 )
                 scheduler = self._get_hls_scheduler()
                 model_result = scheduler.predict(request)
-                unfinished_keys = {
-                    (job.job_id, task.operation_id)
+                unfinished_key_map = {
+                    (
+                        job.job_id,
+                        task.stage_operation_id,
+                    ): task.operation_id
                     for job in self.simulator.jobs
                     for task in job.tasks
-                    if task.status in {"pending", "scheduled"}
+                    if (
+                        task.status in {"pending", "scheduled"}
+                        and task.stage_id == process_id
+                    )
                 }
                 assignments = {
-                    (row["job_id"], row["operation_index"]): row[
-                        "machine_id"
-                    ]
+                    (
+                        row["job_id"],
+                        unfinished_key_map[
+                            (
+                                row["job_id"],
+                                row["operation_index"],
+                            )
+                        ],
+                    ): int(row["machine_id"])
+                    + int(source.get("machine_offset", 0))
                     for row in model_result["schedule"]
                     if (
                         row["job_id"],
                         row["operation_index"],
                     )
-                    in unfinished_keys
+                    in unfinished_key_map
                 }
                 assignments = self._completeUnfinishedAssignments(
-                    assignments
+                    assignments,
+                    stage_ids={process_id},
                 )
                 reoptimization = (
                     self.simulator.reoptimizeUnfinishedOperations(
@@ -869,6 +1137,7 @@ class SimulationManager:
                             self.simulator.pending_event_timestamp
                             or self.simulator.curr_time,
                         ),
+                        stage_ids={process_id},
                     )
                 )
                 with self.state.lock:
@@ -910,6 +1179,7 @@ class SimulationManager:
                 "hls_schedule_times_used": False,
                 "transport_time_recalculated": True,
                 "assignment_scope": "pending_and_scheduled_operations",
+                "process_ids": [process_id],
                 "hls_assignment_count": len(assignments),
                 "additional_data_used": model_result.get(
                     "additional_data_used",
@@ -930,7 +1200,12 @@ class SimulationManager:
                 )
             return response
 
-    def reoptimize_command(self, method, config=None):
+    def reoptimize_command(
+        self,
+        method,
+        config=None,
+        process_id=1,
+    ):
         """Dispatch a DRL or HLS reoptimization command."""
         normalized_method = self._normalize_reoptimization_method(method)
         if config is None:
@@ -950,13 +1225,20 @@ class SimulationManager:
 
         normalized_config = dict(config)
         if normalized_method == "hls":
-            result = self.hls_reoptimize(**normalized_config)
+            result = self.hls_reoptimize(
+                process_id=process_id,
+                **normalized_config,
+            )
         else:
-            result = self.reoptimize(**normalized_config)
+            result = self.reoptimize(
+                process_id=process_id,
+                **normalized_config,
+            )
         return {
             **result,
             "optimizer": normalized_method,
             "command_config": normalized_config,
+            "process_ids": [int(process_id)],
         }
 
     def submit_random_jobs(self, seed=0, order_source="manual"):
@@ -1147,6 +1429,11 @@ class SimulationManager:
         duration,
     ):
         """Apply a machine anomaly and reschedule long downtime with DRL."""
+        if not self.anomaly_handling_enabled:
+            raise ValueError(
+                "Machine anomaly handling is disabled by "
+                "anomaly_handling.enabled=false."
+            )
         from simulator.anomaly import MachineAnomalyType
 
         anomaly = MachineAnomalyType.normalize(anomaly_type)
@@ -1186,11 +1473,15 @@ class SimulationManager:
                     self.simulator.deferUnavailableTasks(
                         current_time=now
                     )
+                    process_id = self.simulator.machines[
+                        int(machine_id)
+                    ].stage_id
                     model_result, assignments = (
                         self._request_drl_assignments(
                             num_samples=MACHINE_ANOMALY_DRL_NUM_SAMPLES,
                             seed=int(self.simulator.seed),
                             excluded_machines={int(machine_id)},
+                            process_id=process_id,
                         )
                     )
                     reoptimization = (
@@ -1198,6 +1489,7 @@ class SimulationManager:
                             assignments,
                             current_time=now,
                             excluded_machines={int(machine_id)},
+                            stage_ids={process_id},
                         )
                     )
                     with self.state.lock:
@@ -1226,6 +1518,7 @@ class SimulationManager:
                             {
                                 "optimizer": "machine_anomaly_drl",
                                 "machine_id": int(machine_id),
+                                "process_id": int(process_id),
                                 "anomaly_type": anomaly.value,
                                 "simulation_time": now,
                             },
@@ -1274,8 +1567,23 @@ class SimulationManager:
         anomaly = rng.choice(list(MachineAnomalyType))
         return anomaly, MACHINE_ANOMALY_DEFAULT_DURATIONS[anomaly]
 
-    def handle_prediction_alarms(self, t, predictions):
+    def handle_prediction_alarms(
+        self,
+        t,
+        predictions,
+        process_id=1,
+    ):
         """Inject predicted anomalies once for one aligned detection time."""
+        if not self.anomaly_handling_enabled:
+            return {
+                "success": True,
+                "t": int(t),
+                "process_id": int(process_id),
+                "injected_machine_ids": [],
+                "injected_events": [],
+                "skipped_machines": [],
+                "reason": "anomaly_handling_disabled",
+            }
         if isinstance(t, bool):
             raise ValueError("t must be an integer.")
         try:
@@ -1290,6 +1598,10 @@ class SimulationManager:
             raise ValueError(
                 "predictions must contain at most 500 machines."
             )
+        try:
+            normalized_process_id = int(process_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("process_id must be an integer.") from exc
 
         with self.mutation_lock:
             with self.state.lock:
@@ -1308,7 +1620,11 @@ class SimulationManager:
                 if self._prediction_alarm_generation != generation:
                     self._prediction_alarm_generation = generation
                     self._prediction_alarm_timestamps.clear()
-                if prediction_t in self._prediction_alarm_timestamps:
+                prediction_key = (
+                    normalized_process_id,
+                    prediction_t,
+                )
+                if prediction_key in self._prediction_alarm_timestamps:
                     return {
                         "success": True,
                         "t": prediction_t,
@@ -1316,7 +1632,35 @@ class SimulationManager:
                         "skipped_machines": [],
                         "duplicate": True,
                     }
-                self._prediction_alarm_timestamps.add(prediction_t)
+                self._prediction_alarm_timestamps.add(prediction_key)
+
+            process_definitions = getattr(
+                self.simulator,
+                "process_definitions",
+                [],
+            )
+            process_definition = next(
+                (
+                    process
+                    for process in process_definitions
+                    if int(process["id"]) == normalized_process_id
+                ),
+                None,
+            )
+            if process_definition is None:
+                if normalized_process_id != 1:
+                    raise ValueError(
+                        f"Unknown process_id: {normalized_process_id}"
+                    )
+                machine_offset = 0
+                process_machine_count = len(self.simulator.machines)
+            else:
+                machine_offset = int(
+                    process_definition["machine_offset"]
+                )
+                process_machine_count = int(
+                    process_definition["machine_count"]
+                )
 
             injected_machine_ids = []
             injected_events = []
@@ -1338,7 +1682,7 @@ class SimulationManager:
                     )
                     continue
                 try:
-                    machine_id = int(raw_machine_id)
+                    local_machine_id = int(raw_machine_id)
                 except (TypeError, ValueError):
                     skipped_machines.append(
                         {
@@ -1347,10 +1691,21 @@ class SimulationManager:
                         }
                     )
                     continue
+                if not 0 <= local_machine_id < process_machine_count:
+                    skipped_machines.append(
+                        {
+                            "machine_id": local_machine_id,
+                            "process_id": normalized_process_id,
+                            "reason": "unknown_machine",
+                        }
+                    )
+                    continue
+                machine_id = machine_offset + local_machine_id
                 if not 0 <= machine_id < len(self.simulator.machines):
                     skipped_machines.append(
                         {
                             "machine_id": machine_id,
+                            "process_id": normalized_process_id,
                             "reason": "unknown_machine",
                         }
                     )
@@ -1366,6 +1721,7 @@ class SimulationManager:
                     skipped_machines.append(
                         {
                             "machine_id": machine_id,
+                            "process_id": normalized_process_id,
                             "reason": "active_anomaly",
                         }
                     )
@@ -1393,6 +1749,8 @@ class SimulationManager:
                 injected_events.append(
                     {
                         "machine_id": machine_id,
+                        "local_machine_id": local_machine_id,
+                        "process_id": normalized_process_id,
                         "anomaly_type": anomaly.value,
                         "anomaly_duration": duration,
                         "event_id": result.get("event_id"),
@@ -1408,6 +1766,7 @@ class SimulationManager:
             return {
                 "success": True,
                 "t": prediction_t,
+                "process_id": normalized_process_id,
                 "injected_machine_ids": injected_machine_ids,
                 "injected_events": injected_events,
                 "skipped_machines": skipped_machines,
@@ -1426,10 +1785,14 @@ class SimulationManager:
             self.simulator.deferUnavailableTasks(
                 current_time=recovery_time
             )
+            process_id = self.simulator.machines[
+                int(machine_id)
+            ].stage_id
             model_result, assignments = (
                 self._request_drl_assignments(
                     num_samples=MACHINE_ANOMALY_DRL_NUM_SAMPLES,
                     seed=int(self.simulator.seed),
+                    process_id=process_id,
                 )
             )
             reoptimization = (
@@ -1439,6 +1802,7 @@ class SimulationManager:
                         self.simulator.curr_time,
                         float(recovery_time),
                     ),
+                    stage_ids={process_id},
                 )
             )
             with self.state.lock:
@@ -1462,6 +1826,7 @@ class SimulationManager:
                     {
                         "optimizer": "machine_recovery_drl",
                         "machine_id": int(machine_id),
+                        "process_id": int(process_id),
                         "simulation_time": float(recovery_time),
                     },
                     response,
@@ -1525,6 +1890,11 @@ class SimulationManager:
     def set_auto_machine_anomaly(self, enabled):
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be a boolean.")
+        if enabled and not self.anomaly_handling_enabled:
+            raise ValueError(
+                "Machine anomaly handling is disabled by "
+                "anomaly_handling.enabled=false."
+            )
         with self.mutation_lock:
             self.auto_machine_anomaly_enabled = enabled
             next_time = None
@@ -1656,13 +2026,24 @@ class SimulationManager:
         self,
         assignments,
         excluded_machines=None,
+        stage_ids=None,
     ):
         """Keep model-compatible assignments and cover dynamically added Jobs."""
         completed = dict(assignments)
         excluded_machines = set(excluded_machines or [])
+        scoped_stage_ids = (
+            None
+            if stage_ids is None
+            else {int(stage_id) for stage_id in stage_ids}
+        )
         for job in self.simulator.jobs:
             for task in job.tasks:
                 if task.status not in {"pending", "scheduled"}:
+                    continue
+                if (
+                    scoped_stage_ids is not None
+                    and task.stage_id not in scoped_stage_ids
+                ):
                     continue
                 key = (job.job_id, task.operation_id)
                 if key in self.simulator.deferred_anomaly_tasks:
@@ -1851,6 +2232,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     "num_jobs": source["num_jobs"],
                     "num_machines": source["num_machines"],
                     "is_default": source["is_default"],
+                    "processes": source.get("processes", []),
                 }
                 for source in self.server.manager.datasets
             ]
@@ -1925,6 +2307,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 machine_count = int(
                     query.get("machine_count", ["1"])[0]
                 )
+                process_id = int(
+                    query.get("process_id", ["1"])[0]
+                )
                 prediction = (
                     self.server.manager.detection_data.predict(
                         t,
@@ -1935,6 +2320,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self.server.manager.handle_prediction_alarms(
                         prediction["t"],
                         prediction["predictions"],
+                        process_id=process_id,
                     )
                 )
                 self._send_json({**prediction, **injection})
@@ -2092,6 +2478,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 result = self.server.manager.reoptimize(
                     num_samples=body.get("num_samples", 1),
                     seed=body.get("seed", 0),
+                    process_id=body.get("process_id", 1),
                 )
                 self._send_json(result)
             except (TypeError, ValueError) as exc:
@@ -2115,6 +2502,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 }
                 result = self.server.manager.hls_reoptimize(
                     seed=body.get("seed", 0),
+                    process_id=body.get("process_id", 1),
                     **options,
                 )
                 self._send_json(result)
@@ -2137,6 +2525,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 result = self.server.manager.reoptimize_command(
                     method,
                     config,
+                    process_id=body.get("process_id", 1),
                 )
                 self._send_json(result)
             except (TypeError, ValueError) as exc:

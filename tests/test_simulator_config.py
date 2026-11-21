@@ -15,6 +15,9 @@ class SimulatorConfigTest(unittest.TestCase):
             Path("simulator_config.json").resolve(),
         )
         self.assertEqual(config["time"]["speed"], 10.0)
+        self.assertFalse(
+            config["anomaly_handling"]["enabled"]
+        )
         self.assertEqual(config["visualization"]["speed"], 2.0)
         self.assertEqual(
             config["visualization"]["display_percent"], 100
@@ -45,6 +48,22 @@ class SimulatorConfigTest(unittest.TestCase):
         self.assertIn("schedule_file", config["paths"])
         self.assertIn("gantt_file", config["paths"])
         self.assertIn("seed", config["simulation"])
+        self.assertEqual(
+            config["simulation"]["process_stage_batch_window"],
+            10.0,
+        )
+        self.assertEqual(
+            config["simulation"][
+                "material_replenishment_lead_time"
+            ],
+            5.0,
+        )
+        self.assertEqual(
+            config["simulation"][
+                "material_replenishment_target_factor"
+            ],
+            3.0,
+        )
         self.assertNotIn("model", config)
 
     def test_custom_config_path_is_loaded(self):
@@ -87,6 +106,56 @@ class SimulatorConfigTest(unittest.TestCase):
             config = json.loads(Path(DEFAULT_CONFIG_PATH).read_text("utf-8"))
             config["detection_data"]["prediction_interval"] = 0
             custom_path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                load_simulator_config(custom_path)
+
+    def test_invalid_anomaly_handling_flag_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_path = Path(temp_dir) / "invalid-anomaly.json"
+            config = json.loads(Path(DEFAULT_CONFIG_PATH).read_text("utf-8"))
+            config["anomaly_handling"]["enabled"] = "false"
+            custom_path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                load_simulator_config(custom_path)
+
+    def test_invalid_process_stage_batch_window_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_path = Path(temp_dir) / "invalid-batch-window.json"
+            config = json.loads(Path(DEFAULT_CONFIG_PATH).read_text("utf-8"))
+            config["simulation"]["process_stage_batch_window"] = -1
+            custom_path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                load_simulator_config(custom_path)
+
+    def test_invalid_material_replenishment_lead_time_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_path = Path(temp_dir) / "invalid-material-time.json"
+            config = json.loads(Path(DEFAULT_CONFIG_PATH).read_text("utf-8"))
+            config["simulation"][
+                "material_replenishment_lead_time"
+            ] = -1
+            custom_path.write_text(
+                json.dumps(config),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                load_simulator_config(custom_path)
+
+    def test_invalid_material_replenishment_target_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_path = Path(temp_dir) / "invalid-material-target.json"
+            config = json.loads(Path(DEFAULT_CONFIG_PATH).read_text("utf-8"))
+            config["simulation"][
+                "material_replenishment_target_factor"
+            ] = 0.9
+            custom_path.write_text(
+                json.dumps(config),
+                encoding="utf-8",
+            )
 
             with self.assertRaises(ValueError):
                 load_simulator_config(custom_path)

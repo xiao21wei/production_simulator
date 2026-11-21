@@ -9,13 +9,26 @@ class Machine:
         ready_time,
         operation_times,
         operation_energy,
+        stage_id=1,
+        local_machine_id=None,
+        materials=None,
     ):
         self.machine_id = machine_id
         self.machine_status = machine_status  # "idle", "busy", "scheduled"
         self.ready_time = ready_time
         self.operation_times = operation_times
         self.operation_energy = operation_energy
+        self.stage_id = int(stage_id)
+        self.local_machine_id = (
+            self.machine_id
+            if local_machine_id is None
+            else int(local_machine_id)
+        )
         self.pending_operations = []
+        self.materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity in (materials or {}).items()
+        }
         self.anomaly_type = None
         self.anomaly_started_at = None
         self.recovery_time = None

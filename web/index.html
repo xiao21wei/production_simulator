@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>生产调度实时仿真</title>
+  <title>生产调度实时监控</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -11,8 +11,8 @@
     <div class="brand">
       <span class="brand-mark"></span>
       <div>
-        <h1>生产调度实时仿真</h1>
-        <p>Production Scheduling Digital Twin</p>
+        <h1>生产调度实时监控</h1>
+        <p>Production Scheduling Real-time Monitoring</p>
       </div>
     </div>
 
@@ -139,30 +139,52 @@
     </aside>
 
     <section class="panel schedule-panel">
-      <div class="panel-heading schedule-heading">
-        <div class="view-tabs" role="tablist" aria-label="中央视图">
-          <button
-            id="schedule-tab"
-            class="view-tab active"
-            type="button"
-            role="tab"
-            aria-selected="true"
-            aria-controls="schedule-view"
-          >
-            工序调度
-          </button>
-          <button
-            id="machine-board-tab"
-            class="view-tab"
-            type="button"
-            role="tab"
-            aria-selected="false"
-            aria-controls="machine-board-view"
-          >
-            设备状态看板
-          </button>
+      <div class="schedule-navigation">
+        <div class="schedule-navigation-row process-navigation-row">
+          <span class="navigation-label">工艺</span>
+          <div
+            id="process-tabs"
+            class="process-tabs"
+            role="tablist"
+            aria-label="选择制造工艺"
+          ></div>
         </div>
-        <div id="clock-readout" class="clock-readout">T+0000</div>
+        <div class="schedule-navigation-row view-navigation-row">
+          <span class="navigation-label">视图</span>
+          <div class="view-tabs" role="tablist" aria-label="中央视图">
+            <button
+              id="schedule-tab"
+              class="view-tab active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="schedule-view"
+            >
+              工序调度
+            </button>
+            <button
+              id="machine-board-tab"
+              class="view-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="machine-board-view"
+            >
+              设备状态看板
+            </button>
+            <button
+              id="material-board-tab"
+              class="view-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="material-board-view"
+            >
+              物料库存看板
+            </button>
+          </div>
+          <div id="clock-readout" class="clock-readout">T+0000</div>
+        </div>
       </div>
 
       <div
@@ -214,6 +236,21 @@
           <span id="machine-board-summary">等待仿真启动</span>
         </div>
         <div id="machine-card-grid" class="machine-card-grid">
+          <div class="empty-state">等待仿真启动</div>
+        </div>
+      </div>
+
+      <div
+        id="material-board-view"
+        class="material-board-view hidden"
+        role="tabpanel"
+        aria-labelledby="material-board-tab"
+      >
+        <div class="material-board-summary">
+          <span>当前工艺机器物料库存</span>
+          <span id="material-board-summary">等待仿真启动</span>
+        </div>
+        <div id="material-board-grid" class="material-board-grid">
           <div class="empty-state">等待仿真启动</div>
         </div>
       </div>

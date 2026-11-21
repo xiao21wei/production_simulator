@@ -11,6 +11,9 @@ class Task:
         processing_energies,
         predecessor_id=None,
         successor_id=None,
+        stage_id=1,
+        stage_operation_id=None,
+        material_consumption=None,
     ):
         self.task_id = task_id
         self.job_id = job_id
@@ -19,6 +22,14 @@ class Task:
         self.processing_energies = dict(processing_energies)
         self.predecessor_id = predecessor_id
         self.successor_id = successor_id
+        self.stage_id = int(stage_id)
+        self.stage_operation_id = (
+            self.operation_id
+            if stage_operation_id is None
+            else int(stage_operation_id)
+        )
+        self.material_consumption = dict(material_consumption or {})
+        self.material_consumption_committed = False
 
         self.eligible_machines = tuple(sorted(self.processing_times))
         self.status = "pending"
@@ -85,6 +96,7 @@ class Job:
         priority=0,
         transport_time_matrix=None,
         transport_energy_matrix=None,
+        material_consumption=None,
     ):
         self.job_id = job_id
         self.operation_count = operation_count
@@ -99,6 +111,7 @@ class Job:
         self.priority = priority
         self.transport_time_matrix = transport_time_matrix
         self.transport_energy_matrix = transport_energy_matrix
+        self.material_consumption = material_consumption or {}
 
         self.release_time = ready_time
         self.due_date = due_time

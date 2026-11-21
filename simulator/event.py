@@ -12,8 +12,12 @@ class EventType(Enum):
     JOB_START = "job_start"
     TRANSPORT_FINISH = "transport_finish"
     OPERATION_START = "operation_start"
+    PROCESS_STAGE_FINISH = "process_stage_finish"
+    PROCESS_STAGE_BATCH_SCHEDULE = "process_stage_batch_schedule"
     MACHINE_ANOMALY = "machine_anomaly"
     MACHINE_RECOVERY = "machine_recovery"
+    MATERIAL_REPLENISHMENT = "material_replenishment"
+    MATERIAL_RECOVERY = "material_recovery"
 
 
 class BaseEvent:
@@ -40,10 +44,18 @@ class BaseEvent:
             return EventType.OPERATION_START
         elif isinstance(self, OperationFinishEvent):
             return EventType.OPERATION_FINISH
+        elif isinstance(self, ProcessStageFinishEvent):
+            return EventType.PROCESS_STAGE_FINISH
+        elif isinstance(self, ProcessStageBatchScheduleEvent):
+            return EventType.PROCESS_STAGE_BATCH_SCHEDULE
         elif isinstance(self, MachineAnomalyEvent):
             return EventType.MACHINE_ANOMALY
         elif isinstance(self, MachineRecoveryEvent):
             return EventType.MACHINE_RECOVERY
+        elif isinstance(self, MaterialReplenishmentEvent):
+            return EventType.MATERIAL_REPLENISHMENT
+        elif isinstance(self, MaterialRecoveryEvent):
+            return EventType.MATERIAL_RECOVERY
         # elif isinstance(self, OrderUpdateEvent):
         #     return EventType.ORDER_UPDATE
         # elif isinstance(self, OperationTimeUpdateEvent):
@@ -114,11 +126,26 @@ class JobFinishEvent(BaseEvent):
         self.job_id = job_id
 
 class TransportFinishEvent(BaseEvent):
-    def __init__(self, id, timestamp, job_id, operation_id, machine_id):
+    def __init__(
+        self,
+        id,
+        timestamp,
+        job_id,
+        operation_id,
+        machine_id,
+        historical=False,
+        transport_start=None,
+        transport_end=None,
+    ):
         super().__init__(id, timestamp)
         self.job_id = job_id
         self.operation_id = operation_id
         self.machine_id = machine_id
+        self.historical = bool(historical)
+        if transport_start is not None:
+            self.transport_start = float(transport_start)
+        if transport_end is not None:
+            self.transport_end = float(transport_end)
 
 class OperationStartEvent(BaseEvent):
     def __init__(self, id, timestamp, job_id, operation_id, machine_id):
@@ -133,6 +160,144 @@ class OperationFinishEvent(BaseEvent):
         self.job_id = job_id
         self.operation_id = operation_id
         self.machine_id = machine_id
+
+
+class MaterialReplenishmentEvent(BaseEvent):
+    """Replenish materials that are insufficient for an operation."""
+
+    def __init__(
+        self,
+        id,
+        timestamp,
+        machine_id,
+        job_id,
+        operation_id,
+        required_materials,
+        replenishment_materials,
+        available_materials=None,
+        target_materials=None,
+        shortage_materials=None,
+    ):
+        super().__init__(id, timestamp)
+        self.machine_id = int(machine_id)
+        self.job_id = int(job_id)
+        self.operation_id = int(operation_id)
+        self.required_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity in required_materials.items()
+        }
+        self.replenishment_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity
+            in replenishment_materials.items()
+        }
+        self.available_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity
+            in (available_materials or {}).items()
+        }
+        self.target_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity
+            in (target_materials or {}).items()
+        }
+        self.shortage_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity
+            in (shortage_materials or {}).items()
+        }
+        self.added_materials = {}
+        self.result = None
+
+
+class MaterialRecoveryEvent(BaseEvent):
+    """Recheck replenished stock and release the blocked operation."""
+
+    def __init__(
+        self,
+        id,
+        timestamp,
+        machine_id,
+        job_id,
+        operation_id,
+        required_materials,
+        replenishment_materials=None,
+        target_materials=None,
+        shortage_materials=None,
+        replenishment_event_id=None,
+        lead_time=0.0,
+    ):
+        super().__init__(id, timestamp)
+        self.machine_id = int(machine_id)
+        self.job_id = int(job_id)
+        self.operation_id = int(operation_id)
+        self.required_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity in required_materials.items()
+        }
+        self.replenishment_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity
+            in (replenishment_materials or {}).items()
+        }
+        self.target_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity
+            in (target_materials or {}).items()
+        }
+        self.shortage_materials = {
+            str(material_id): float(quantity)
+            for material_id, quantity
+            in (shortage_materials or {}).items()
+        }
+        self.replenishment_event_id = replenishment_event_id
+        self.lead_time = float(lead_time)
+        self.added_materials = {}
+        self.available_materials = {}
+        self.result = None
+
+
+class ProcessStageFinishEvent(BaseEvent):
+    def __init__(
+        self,
+        id,
+        timestamp,
+        job_id,
+        from_stage,
+        to_stage,
+    ):
+        super().__init__(id, timestamp)
+        self.job_id = job_id
+        self.from_stage = from_stage
+        self.to_stage = to_stage
+        self.result = None
+
+
+class ProcessStageBatchScheduleEvent(BaseEvent):
+    """Schedule Jobs that entered one target process inside a batch window."""
+
+    def __init__(
+        self,
+        id,
+        timestamp,
+        stage_id,
+        batch_window,
+    ):
+        super().__init__(id, timestamp)
+        self.stage_id = int(stage_id)
+        self.to_stage = int(stage_id)
+        self.batch_window = float(batch_window)
+        self.job_ids = []
+        self.job_ready_times = {}
+        self.job_count = 0
+        self.result = None
+
+    def add_job(self, job_id, ready_time):
+        job_id = int(job_id)
+        if job_id not in self.job_ready_times:
+            self.job_ids.append(job_id)
+        self.job_ready_times[job_id] = float(ready_time)
+        self.job_count = len(self.job_ids)
 
 
 

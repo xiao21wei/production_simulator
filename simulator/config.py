@@ -72,8 +72,56 @@ def _validate_config(config):
             "simulation.auxiliary_energy must be a non-negative number."
         )
 
+    batch_window = config["simulation"].get(
+        "process_stage_batch_window",
+        10.0,
+    )
+    if (
+        not isinstance(batch_window, (int, float))
+        or isinstance(batch_window, bool)
+        or batch_window < 0
+    ):
+        raise ValueError(
+            "simulation.process_stage_batch_window must be a "
+            "non-negative number."
+        )
+
+    replenishment_lead_time = config["simulation"].get(
+        "material_replenishment_lead_time",
+        5.0,
+    )
+    if (
+        not isinstance(replenishment_lead_time, (int, float))
+        or isinstance(replenishment_lead_time, bool)
+        or replenishment_lead_time < 0
+    ):
+        raise ValueError(
+            "simulation.material_replenishment_lead_time must be a "
+            "non-negative number."
+        )
+
+    replenishment_target_factor = config["simulation"].get(
+        "material_replenishment_target_factor",
+        3.0,
+    )
+    if (
+        not isinstance(replenishment_target_factor, (int, float))
+        or isinstance(replenishment_target_factor, bool)
+        or replenishment_target_factor < 1
+    ):
+        raise ValueError(
+            "simulation.material_replenishment_target_factor must be "
+            "a number greater than or equal to 1."
+        )
+
     if not isinstance(config["simulation"].get("log_tag"), bool):
         raise ValueError("simulation.log_tag must be a boolean.")
+
+    anomaly_handling = config.get("anomaly_handling", {})
+    if not isinstance(anomaly_handling, dict):
+        raise ValueError("anomaly_handling must be a JSON object.")
+    if not isinstance(anomaly_handling.get("enabled", False), bool):
+        raise ValueError("anomaly_handling.enabled must be a boolean.")
 
     visualization = config.get("visualization", {})
     if not isinstance(visualization, dict):

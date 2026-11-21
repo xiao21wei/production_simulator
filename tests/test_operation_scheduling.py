@@ -85,6 +85,37 @@ class OperationSchedulingTest(unittest.TestCase):
                     previous.end_time,
                 )
 
+    def test_initialization_loads_single_process_material_data(self):
+        simulator = self._create_simulator()
+
+        self.assertTrue(simulator.machines)
+        for machine in simulator.machines:
+            self.assertEqual(len(machine.materials), 4)
+            self.assertTrue(
+                all(
+                    quantity >= 0
+                    for quantity in machine.materials.values()
+                )
+            )
+            self.assertTrue(
+                any(
+                    quantity > 0
+                    for quantity in machine.materials.values()
+                )
+            )
+        for job in simulator.jobs:
+            self.assertEqual(
+                set(job.material_consumption),
+                {1},
+            )
+            materials = job.material_consumption[1]["job_materials"]
+            self.assertEqual(len(materials), 1)
+            self.assertEqual(sum(materials.values()), 1)
+            self.assertEqual(
+                job.material_consumption[1]["tasks"],
+                {},
+            )
+
     def test_initial_schedule_creates_transport_segments(self):
         simulator = self._create_simulator()
         transported_tasks = 0
@@ -438,7 +469,8 @@ class OperationSchedulingTest(unittest.TestCase):
                     )
                     if (
                         task.transport_start is not None
-                        and task.transport_start < simulator.curr_time
+                        and task.transport_end is not None
+                        and task.transport_end < simulator.curr_time
                     ):
                         self.assertTrue(task.transport_completed)
         self.assertGreaterEqual(result["transport_time_added"], 0)
@@ -482,7 +514,7 @@ class OperationSchedulingTest(unittest.TestCase):
 
     def test_reoptimization_preserves_completed_transport_to_same_machine(self):
         simulator = self._create_simulator()
-        self._advance_until(simulator, 13)
+        self._advance_until(simulator, 28)
         job_id, operation_id = 2, 2
         task = simulator.jobs[job_id].tasks[operation_id]
         self.assertEqual(task.status, "scheduled")
@@ -569,7 +601,7 @@ class OperationSchedulingTest(unittest.TestCase):
 
     def test_reoptimization_reroutes_from_current_machine_and_keeps_energy(self):
         simulator = self._create_simulator()
-        self._advance_until(simulator, 13)
+        self._advance_until(simulator, 28)
         job_id, operation_id = 2, 2
         task = simulator.jobs[job_id].tasks[operation_id]
         old_machine = task.assigned_machine

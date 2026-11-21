@@ -14,6 +14,7 @@ const EVENT_TEXT = {
   OperationStartEvent: "工序开始",
   OperationFinishEvent: "工序完成",
   TransportFinishEvent: "运输完成",
+  ProcessStageBatchScheduleEvent: "工艺批量排程",
   JobSubmitEvent: "作业提交",
   JobStartEvent: "作业开始",
   JobFinishEvent: "作业完成",
@@ -22,11 +23,20 @@ const EVENT_TEXT = {
   OrderCancelEvent: "订单取消",
   MachineAnomalyEvent: "设备异常",
   MachineRecoveryEvent: "设备恢复",
+  MaterialReplenishmentEvent: "物料异常 · 补料",
+  MaterialRecoveryEvent: "物料异常 · 恢复",
 };
 
 const ANOMALY_LIST_EVENT_TYPES = new Set([
   "OrderInsertEvent",
   "OrderCancelEvent",
+  "MachineAnomalyEvent",
+  "MachineRecoveryEvent",
+  "MaterialReplenishmentEvent",
+  "MaterialRecoveryEvent",
+]);
+
+const TIMELINE_REBUILD_EVENT_TYPES = new Set([
   "MachineAnomalyEvent",
   "MachineRecoveryEvent",
 ]);
@@ -37,14 +47,66 @@ const JOB_STATUS_TEXT = {
   canceled: "已取消",
 };
 
+const PROCESS_ACTIVE_STATUS_TEXT = {
+  1: "冲压中",
+  2: "焊装中",
+  3: "涂装中",
+  4: "总装中",
+};
+
 const JOB_GROUPS = [
-  { status: "processing", label: "加工中" },
-  { status: "completed", label: "已完成" },
-  { status: "canceled", label: "已取消" },
+  {
+    key: "stage-1",
+    status: "processing",
+    stage: 1,
+    label: "冲压中",
+    className: "processing",
+  },
+  {
+    key: "stage-2",
+    status: "processing",
+    stage: 2,
+    label: "焊装中",
+    className: "processing",
+  },
+  {
+    key: "stage-3",
+    status: "processing",
+    stage: 3,
+    label: "涂装中",
+    className: "processing",
+  },
+  {
+    key: "stage-4",
+    status: "processing",
+    stage: 4,
+    label: "总装中",
+    className: "processing",
+  },
+  {
+    key: "completed",
+    status: "completed",
+    label: "已完成",
+    className: "completed",
+  },
+  {
+    key: "canceled",
+    status: "canceled",
+    label: "已取消",
+    className: "canceled",
+  },
 ];
 
+const TIMELINE_OPERATION_STATUSES = new Set([
+  "processing",
+  "completed",
+]);
+
 const DEFAULT_JOB_GROUP_OPEN = {
-  processing: false,
+  "stage-1": false,
+  "stage-2": false,
+  "stage-3": false,
+  "stage-4": false,
   completed: false,
   canceled: false,
 };
@@ -99,6 +161,10 @@ const elements = {
   machineBoardTab: document.querySelector("#machine-board-tab"),
   machineBoardView: document.querySelector("#machine-board-view"),
   machineCardGrid: document.querySelector("#machine-card-grid"),
+  materialBoardGrid: document.querySelector("#material-board-grid"),
+  materialBoardSummary: document.querySelector("#material-board-summary"),
+  materialBoardTab: document.querySelector("#material-board-tab"),
+  materialBoardView: document.querySelector("#material-board-view"),
   manualJobInsertButton: document.querySelector(
     "#manual-job-insert-button"
   ),
@@ -108,6 +174,7 @@ const elements = {
   orderList: document.querySelector("#order-list"),
   pauseButton: document.querySelector("#pause-button"),
   playhead: document.querySelector("#playhead"),
+  processTabs: document.querySelector("#process-tabs"),
   reoptimizeButton: document.querySelector("#reoptimize-button"),
   reoptimizerSelect: document.querySelector("#reoptimizer-select"),
   scheduleTab: document.querySelector("#schedule-tab"),
@@ -141,6 +208,8 @@ const app = {
   transportSegments: new Map(),
   nextOperationStart: new Map(),
   pendingSignatures: new Map(),
+  transportPlanSignature: null,
+  lastPendingQueueRenderAt: 0,
   planRevision: null,
   jobGroupOpen: { ...DEFAULT_JOB_GROUP_OPEN },
   jobGroups: new Map(),
@@ -149,12 +218,22 @@ const app = {
   orderListSignature: null,
   cancelRequestPending: false,
   anomalyCount: 0,
+  anomalyHandlingEnabled: false,
   machineStates: [],
+  processCatalog: [],
+  processCatalogSignature: null,
+  processPlans: new Map(),
+  processMachineStates: new Map(),
+  activeProcessId: 1,
+  latestSnapshot: null,
   machineCards: new Map(),
   machineDetection: new Map(),
+  materialCatalog: {},
   detectionBuffers: new Map(),
   detectionMachines: [],
   detectionMachineCount: null,
+  detectionProcessId: null,
+  detectionInitialT: 0,
   detectionFields: [],
   detectionHistoryPoints: 60,
   detectionPredictionHorizon: 20,
@@ -180,6 +259,32 @@ function operationKey(jobId, operationId) {
   return `${jobId}-${operationId}`;
 }
 
+function operationDisplayIndex(operation) {
+  if (
+    operation.stage_operation_id !== null
+    && operation.stage_operation_id !== undefined
+  ) {
+    const stageOperationId = Number(operation.stage_operation_id);
+    if (Number.isFinite(stageOperationId)) {
+      return stageOperationId;
+    }
+  }
+  return operation.operation_id;
+}
+
+function operationDisplayName(operation) {
+  return `J${operation.job_id}-O${operationDisplayIndex(operation)}`;
+}
+
+function operationDisplayTitle(operation) {
+  const stageIndex = operationDisplayIndex(operation);
+  const globalIndex = Number(operation.operation_id);
+  const globalSuffix = stageIndex === globalIndex
+    ? ""
+    : ` / 全局工序 O${globalIndex}`;
+  return `作业 ${operation.job_id} / 工艺内工序 O${stageIndex}${globalSuffix}`;
+}
+
 function jobHue(jobId) {
   return (185 + Number(jobId) * 137.508) % 360;
 }
@@ -191,6 +296,8 @@ function resetView() {
   app.transportSegments.clear();
   app.nextOperationStart.clear();
   app.pendingSignatures.clear();
+  app.transportPlanSignature = null;
+  app.lastPendingQueueRenderAt = 0;
   app.planRevision = null;
   app.jobGroupOpen = { ...DEFAULT_JOB_GROUP_OPEN };
   app.jobGroups.clear();
@@ -200,6 +307,12 @@ function resetView() {
   app.cancelRequestPending = false;
   app.anomalyCount = 0;
   app.machineStates = [];
+  app.processCatalog = [];
+  app.processCatalogSignature = null;
+  app.processPlans.clear();
+  app.processMachineStates.clear();
+  app.activeProcessId = 1;
+  app.latestSnapshot = null;
   app.horizon = 100;
   app.visibleSpan = 100;
   app.currentTime = 0;
@@ -217,6 +330,8 @@ function resetView() {
   elements.anomalyList.append(anomalyEmpty);
   elements.jobList.replaceChildren();
   elements.orderList.replaceChildren();
+  elements.processTabs.replaceChildren();
+  elements.materialBoardGrid.replaceChildren();
   elements.anomalyCount.textContent = "0";
   elements.jobCount.textContent = "0";
   elements.timelineBody.scrollTop = 0;
@@ -224,25 +339,165 @@ function resetView() {
 }
 
 function setDashboardTab(tab) {
-  app.activeTab = tab === "machine-board" ? "machine-board" : "schedule";
+  const validTabs = new Set([
+    "schedule",
+    "machine-board",
+    "material-board",
+  ]);
+  app.activeTab = validTabs.has(tab) ? tab : "schedule";
   const showingSchedule = app.activeTab === "schedule";
+  const showingMachineBoard = app.activeTab === "machine-board";
+  const showingMaterialBoard = app.activeTab === "material-board";
   elements.scheduleView.classList.toggle("hidden", !showingSchedule);
-  elements.machineBoardView.classList.toggle("hidden", showingSchedule);
+  elements.machineBoardView.classList.toggle(
+    "hidden",
+    !showingMachineBoard,
+  );
+  elements.materialBoardView.classList.toggle(
+    "hidden",
+    !showingMaterialBoard,
+  );
   elements.scheduleTab.classList.toggle("active", showingSchedule);
-  elements.machineBoardTab.classList.toggle("active", !showingSchedule);
+  elements.machineBoardTab.classList.toggle(
+    "active",
+    showingMachineBoard,
+  );
+  elements.materialBoardTab.classList.toggle(
+    "active",
+    showingMaterialBoard,
+  );
   elements.scheduleTab.setAttribute(
     "aria-selected",
     String(showingSchedule),
   );
   elements.machineBoardTab.setAttribute(
     "aria-selected",
-    String(!showingSchedule),
+    String(showingMachineBoard),
   );
-  if (!showingSchedule) {
+  elements.materialBoardTab.setAttribute(
+    "aria-selected",
+    String(showingMaterialBoard),
+  );
+  if (showingMachineBoard) {
+    syncDetectionWithSimulation(app.status);
     window.requestAnimationFrame(() => {
       renderMachineDetectionCharts();
       resizeMachineCharts();
     });
+  } else if (showingMaterialBoard) {
+    renderMaterialInventoryBoard();
+  }
+}
+
+function currentProcessDefinition() {
+  return app.processCatalog.find(
+    (process) => Number(process.id) === Number(app.activeProcessId),
+  ) || app.processCatalog[0] || {
+    id: 1,
+    name: "冲压",
+    machine_count: Number(
+      app.datasetCatalog.find(
+        (dataset) => dataset.id === elements.datasetSelect.value,
+      )?.num_machines || 1,
+    ),
+    machine_offset: 0,
+    detection_start_t: 0,
+  };
+}
+
+function renderProcessTabs() {
+  if (app.processCatalog.length === 0) {
+    return;
+  }
+  elements.processTabs.replaceChildren();
+  for (const process of app.processCatalog) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      `process-tab${Number(process.id) === Number(app.activeProcessId) ? " active" : ""}`;
+    button.textContent = `${process.name || `工艺${process.id}`}`;
+    const count = document.createElement("small");
+    count.textContent = `M${process.machine_count || 0}`;
+    button.append(count);
+    button.addEventListener("click", () => setActiveProcess(process.id));
+    elements.processTabs.append(button);
+  }
+}
+
+function syncProcessCatalog(processes) {
+  if (!Array.isArray(processes) || processes.length === 0) {
+    return;
+  }
+  app.processCatalog = [...processes].sort(
+    (left, right) => Number(left.id) - Number(right.id),
+  );
+  if (!app.processCatalog.some(
+    (process) => Number(process.id) === Number(app.activeProcessId),
+  )) {
+    app.activeProcessId = Number(app.processCatalog[0].id);
+  }
+  const signature = JSON.stringify(
+    app.processCatalog.map((process) => [
+      process.id,
+      process.name,
+      process.machine_count,
+      process.machine_offset,
+      process.detection_start_t,
+    ]),
+  );
+  if (signature !== app.processCatalogSignature) {
+    app.processCatalogSignature = signature;
+    renderProcessTabs();
+  }
+}
+
+function resetTimelineForProcess() {
+  app.lanes.clear();
+  app.bars.clear();
+  app.transportSegments.clear();
+  app.nextOperationStart.clear();
+  app.pendingSignatures.clear();
+  app.transportPlanSignature = null;
+  app.lastPendingQueueRenderAt = 0;
+  elements.machineLanes.replaceChildren();
+}
+
+function renderActiveProcessSchedule() {
+  if (!app.latestSnapshot) {
+    return;
+  }
+  const processId = String(app.activeProcessId);
+  const plan = app.processPlans.get(processId)
+    || app.latestSnapshot.plan
+    || [];
+  const machineStates = app.processMachineStates.get(processId)
+    || app.latestSnapshot.machine_states
+    || [];
+  resetTimelineForProcess();
+  app.machineStates = machineStates;
+  renderPlan(plan);
+  updateMachineStates(machineStates);
+  renderPendingQueues(plan, app.serverTime, true);
+  renderAxis();
+  renderPlayhead();
+}
+
+function setActiveProcess(processId) {
+  const normalizedId = Number(processId);
+  if (normalizedId === Number(app.activeProcessId)) {
+    return;
+  }
+  app.activeProcessId = normalizedId;
+  renderProcessTabs();
+  updateReoptimizeButtonText();
+  renderActiveProcessSchedule();
+  if (!elements.machineBoardView.classList.contains("hidden")) {
+    clearDetectionStream();
+    syncDetectionWithSimulation(app.status);
+  } else if (
+    !elements.materialBoardView.classList.contains("hidden")
+  ) {
+    renderMaterialInventoryBoard();
   }
 }
 
@@ -273,10 +528,17 @@ function ensureLane(machineId) {
 
   const lane = document.createElement("div");
   lane.className = "machine-lane";
+  const process = currentProcessDefinition();
+  const localMachineId = Math.max(
+    1,
+    Number(machineId) - Number(process.machine_offset || 0) + 1,
+  );
 
   const label = document.createElement("div");
   label.className = "machine-label";
-  label.innerHTML = `<strong>M${String(machineId).padStart(2, "0")}</strong><span></span>`;
+  label.innerHTML = `<strong>M${String(localMachineId).padStart(2, "0")}</strong><span></span>`;
+  label.title =
+    `${process.name || "工艺"} / 全局机器 ${machineId}`;
 
   const track = document.createElement("div");
   track.className = "machine-lane-track";
@@ -319,9 +581,9 @@ function ensureBar(operation) {
     bar.dataset.start = operation.start_time;
     bar.dataset.end = operation.end_time;
     bar.dataset.machine = operation.machine_id;
-    bar.textContent = `J${operation.job_id}-O${operation.operation_id}`;
+    bar.textContent = operationDisplayName(operation);
     bar.title =
-      `作业 ${operation.job_id} / 工序 ${operation.operation_id} / `
+      `${operationDisplayTitle(operation)} / `
       + `M${operation.machine_id} / ${operation.start_time}-${operation.end_time}`;
     lane.track.append(bar);
     app.bars.set(key, bar);
@@ -395,6 +657,25 @@ function ensureTransportSegment(operation, segmentData, index) {
 }
 
 function syncTransportPlan(plan) {
+  const signature = (plan || [])
+    .flatMap((operation) => (
+      (operation.transport_segments || []).map((segment, index) => [
+        operation.job_id,
+        operation.operation_id,
+        index,
+        segment.source_machine,
+        segment.target_machine,
+        segment.transport_start,
+        segment.transport_end,
+        segment.transport_time,
+        segment.completed,
+      ].join(":"))
+    ))
+    .join("|");
+  if (signature === app.transportPlanSignature) {
+    return;
+  }
+  app.transportPlanSignature = signature;
   const desiredKeys = new Set();
   for (const operation of plan || []) {
     const segments = Array.isArray(operation.transport_segments)
@@ -481,6 +762,11 @@ function renderPlan(plan) {
       );
     }
   }
+  for (const operation of plan || []) {
+    if (TIMELINE_OPERATION_STATUSES.has(operation.status)) {
+      ensureBar(operation);
+    }
+  }
   syncTransportPlan(plan);
 
   const planEnd = Math.max(
@@ -528,6 +814,7 @@ function applyDisplayPercent(percent) {
   syncDisplaySelect(app.displayPercent);
   const scale = app.displayPercent / 100;
   const root = document.documentElement;
+  root.style.setProperty("--board-scale", String(scale));
   root.style.setProperty("--lane-height", `${72 * scale}px`);
   root.style.setProperty("--bar-top", `${9 * scale}px`);
   root.style.setProperty("--bar-height", `${54 * scale}px`);
@@ -549,6 +836,16 @@ function applyDisplayPercent(percent) {
   updateVisibleSpan();
   refreshBarStates(app.currentTime);
   renderAxis();
+  if (!elements.machineBoardView.classList.contains("hidden")) {
+    window.requestAnimationFrame(() => {
+      renderMachineDetectionCharts();
+      resizeMachineCharts();
+    });
+  } else if (
+    !elements.materialBoardView.classList.contains("hidden")
+  ) {
+    renderMaterialInventoryBoard();
+  }
 }
 
 function syncAutoJobSubmission(config = {}) {
@@ -557,6 +854,17 @@ function syncAutoJobSubmission(config = {}) {
 
 function syncAutoMachineAnomaly(config = {}) {
   elements.autoMachineAnomaly.checked = Boolean(config.enabled);
+}
+
+function syncAnomalyHandling(config = {}) {
+  app.anomalyHandlingEnabled = Boolean(config.enabled);
+  elements.autoMachineAnomaly.disabled = !app.anomalyHandlingEnabled;
+  elements.insertAnomalyButton.disabled =
+    !app.anomalyHandlingEnabled || app.status !== "running";
+  elements.autoMachineAnomaly.closest("label").title =
+    app.anomalyHandlingEnabled
+      ? "设备异常处置已启用"
+      : "设备异常处置已关闭：只进行调度仿真测试";
 }
 
 function renderAxis() {
@@ -631,6 +939,118 @@ function updateMachineStates(states) {
   }
 }
 
+function formatMaterialQuantity(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return "--";
+  }
+  return numericValue.toLocaleString("zh-CN", {
+    maximumFractionDigits: 2,
+  });
+}
+
+function materialDisplayInfo(materialId) {
+  const catalog = app.materialCatalog[materialId] || {};
+  const unitText = {
+    piece: "件",
+    set: "套",
+  }[catalog.unit] || catalog.unit || "";
+  return {
+    name: catalog.material_name || materialId,
+    unit: unitText,
+  };
+}
+
+function createMaterialInventoryCard(machine) {
+  const card = document.createElement("article");
+  card.className = "material-card";
+  card.dataset.machineId = machine.id;
+
+  const heading = document.createElement("div");
+  heading.className = "material-card-heading";
+  const titleGroup = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent =
+    `M${String(machine.local_id || machine.id + 1).padStart(2, "0")}`;
+  const subtitle = document.createElement("span");
+  subtitle.textContent = `全局机器 ${machine.id}`;
+  titleGroup.append(title, subtitle);
+  const count = document.createElement("span");
+  count.className = "material-kind-count";
+  const materials = Object.entries(machine.materials || {});
+  count.textContent = `${materials.length} 种`;
+  heading.append(titleGroup, count);
+
+  const list = document.createElement("div");
+  list.className = "material-stock-list";
+  if (materials.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "material-stock-empty";
+    empty.textContent = "暂无物料库存数据";
+    list.append(empty);
+  } else {
+    materials.sort(([left], [right]) => left.localeCompare(right));
+    for (const [materialId, quantity] of materials) {
+      const info = materialDisplayInfo(materialId);
+      const row = document.createElement("div");
+      row.className = "material-stock-row";
+      const label = document.createElement("div");
+      label.className = "material-stock-label";
+      const name = document.createElement("strong");
+      name.textContent = info.name;
+      const id = document.createElement("span");
+      id.textContent = materialId;
+      label.append(name, id);
+      const amount = document.createElement("div");
+      amount.className = "material-stock-amount";
+      amount.textContent = formatMaterialQuantity(quantity);
+      const unit = document.createElement("small");
+      unit.textContent = info.unit;
+      amount.append(unit);
+      row.append(label, amount);
+      list.append(row);
+    }
+  }
+  card.append(heading, list);
+  return card;
+}
+
+function renderMaterialInventoryBoard() {
+  const processId = String(app.activeProcessId);
+  const machineStates = app.processMachineStates.get(processId)
+    || app.latestSnapshot?.machine_states
+    || [];
+  if (machineStates.length === 0) {
+    elements.materialBoardSummary.textContent = "等待仿真启动";
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "启动仿真后显示当前工艺机器物料库存";
+    elements.materialBoardGrid.replaceChildren(empty);
+    return;
+  }
+
+  const orderedMachines = [...machineStates].sort(
+    (left, right) => (
+      Number(left.local_id || left.id)
+      - Number(right.local_id || right.id)
+    ),
+  );
+  const materialTypes = new Set();
+  for (const machine of orderedMachines) {
+    for (const materialId of Object.keys(machine.materials || {})) {
+      materialTypes.add(materialId);
+    }
+  }
+  elements.materialBoardSummary.textContent =
+    `${currentProcessDefinition().name || "当前工艺"} · `
+    + `${orderedMachines.length} 台设备 · ${materialTypes.size} 种物料`;
+  const fragment = document.createDocumentFragment();
+  for (const machine of orderedMachines) {
+    fragment.append(createMaterialInventoryCard(machine));
+  }
+  elements.materialBoardGrid.replaceChildren(fragment);
+}
+
 const MACHINE_STATUS_TEXT = {
   idle: "空闲",
   busy: "加工中",
@@ -647,7 +1067,9 @@ function createMachineCard(detection) {
   const heading = document.createElement("div");
   heading.className = "machine-card-heading";
   const title = document.createElement("h3");
-  title.textContent = `检测设备 M${detection.machine_id}`;
+  title.textContent =
+    `${currentProcessDefinition().name || "当前工艺"} · `
+    + `检测设备 M${detection.machine_id}`;
   heading.append(title);
 
   const source = document.createElement("div");
@@ -691,7 +1113,8 @@ function renderMachineDetectionBoard(detections, error = null) {
   }
 
   elements.machineBoardSummary.textContent =
-    `数据集设备 ${detections.length} 台 · `
+    `${currentProcessDefinition().name || "当前工艺"} · `
+    + `检测设备 ${detections.length} 台 · `
     + `最近 ${detections[0]?.history_points || 0} 个时间点`;
 
   const fragment = document.createDocumentFragment();
@@ -761,7 +1184,8 @@ async function pollDetectionPrediction(timestamp) {
   try {
     const response = await fetch(
       `/api/detection/predict?t=${timestamp}`
-      + `&machine_count=${app.detectionMachineCount}`,
+      + `&machine_count=${app.detectionMachineCount}`
+      + `&process_id=${app.detectionProcessId || 1}`,
       { cache: "no-store" },
     );
     const payload = await response.json();
@@ -870,7 +1294,11 @@ async function pollDetectionOverview() {
   }
 }
 
-async function initializeMachineDetection(machineCount) {
+async function initializeMachineDetection(
+  machineCount,
+  processId = app.activeProcessId,
+  initialT = 0,
+) {
   if (app.detectionInitializing) {
     return;
   }
@@ -893,9 +1321,11 @@ async function initializeMachineDetection(machineCount) {
       meta.prediction_interval || 5,
     );
     app.detectionMachineCount = count;
+    app.detectionProcessId = Number(processId);
+    app.detectionInitialT = Number(initialT || 0);
     app.detectionStreamGeneration = app.generation;
     app.detectionMachines = [];
-    app.detectionT = Math.floor(Math.random() * 9000);
+    app.detectionT = app.detectionInitialT;
     app.detectionLastPredictionT = null;
     app.detectionPredictionError = null;
     app.detectionBuffers.clear();
@@ -931,6 +1361,10 @@ function clearDetectionStream() {
   pauseDetectionPolling();
   app.detectionStreamGeneration = null;
   app.detectionMachineCount = null;
+  app.detectionProcessId = null;
+  app.detectionInitialT = 0;
+  app.detectionProcessId = null;
+  app.detectionInitialT = 0;
   app.detectionMachines = [];
   app.detectionLastPredictionT = null;
   app.detectionPredictionError = null;
@@ -959,18 +1393,22 @@ function syncDetectionWithSimulation(status) {
     pauseDetectionPolling();
     return;
   }
-  const selectedDataset = app.datasetCatalog.find(
-    (dataset) => dataset.id === elements.datasetSelect.value,
-  );
-  if (!selectedDataset || app.generation === null) {
+  if (app.generation === null || app.processCatalog.length === 0) {
     return;
   }
-  const machineCount = Number(selectedDataset.num_machines);
+  const process = currentProcessDefinition();
+  const machineCount = Number(process.machine_count || 1);
+  const processId = Number(process.id);
   if (
     app.detectionStreamGeneration !== app.generation
     || app.detectionMachineCount !== machineCount
+    || app.detectionProcessId !== processId
   ) {
-    void initializeMachineDetection(machineCount);
+    void initializeMachineDetection(
+      machineCount,
+      processId,
+      process.detection_start_t,
+    );
     return;
   }
   if (app.detectionTimer === null && !app.detectionInitializing) {
@@ -1027,6 +1465,7 @@ function ensureMachineChart(entry) {
 
 function renderMachineDetectionCharts() {
   const boardVisible = !elements.machineBoardView.classList.contains("hidden");
+  const scale = app.displayPercent / 100;
   for (const [machineId, entry] of app.machineCards.entries()) {
     const detection = app.machineDetection.get(machineId);
     if (!detection) {
@@ -1117,7 +1556,7 @@ function renderMachineDetectionCharts() {
         showSymbol: false,
         smooth: 0.18,
         lineStyle: {
-          width: index === 0 ? 1.8 : 1.4,
+          width: (index === 0 ? 1.8 : 1.4) * scale,
           color: DETECTION_COLORS[field.name] || "#8ecbd8",
         },
         emphasis: { focus: "series" },
@@ -1137,18 +1576,29 @@ function renderMachineDetectionCharts() {
       backgroundColor: "transparent",
       color: Object.values(DETECTION_COLORS),
       legend: {
-        top: 1,
-        left: 4,
-        itemWidth: 10,
-        itemHeight: 5,
-        textStyle: { color: "#8eaab5", fontSize: 9 },
+        top: 1 * scale,
+        left: 4 * scale,
+        itemWidth: 10 * scale,
+        itemHeight: 5 * scale,
+        textStyle: {
+          color: "#8eaab5",
+          fontSize: Math.max(7, 9 * scale),
+        },
       },
-      grid: { top: 32, right: 8, bottom: 18, left: 8 },
+      grid: {
+        top: 32 * scale,
+        right: 8 * scale,
+        bottom: 18 * scale,
+        left: 8 * scale,
+      },
       tooltip: {
         trigger: "axis",
         backgroundColor: "rgba(7, 18, 28, 0.96)",
         borderColor: "rgba(120, 178, 194, 0.28)",
-        textStyle: { color: "#e9f4f7", fontSize: 10 },
+        textStyle: {
+          color: "#e9f4f7",
+          fontSize: Math.max(7, 10 * scale),
+        },
         formatter: (params) => {
           if (!params.length) {
             return "";
@@ -1179,7 +1629,7 @@ function renderMachineDetectionCharts() {
         axisTick: { show: false },
         axisLabel: {
           color: "#718f9b",
-          fontSize: 8,
+          fontSize: Math.max(7, 8 * scale),
           interval: 19,
           formatter: (value) => `T${Number(value) - slotCount + 1}`,
         },
@@ -1274,6 +1724,24 @@ function renderOrderBatches(orders) {
   }
 }
 
+function jobStatusLabel(job) {
+  if (job.status === "processing") {
+    return PROCESS_ACTIVE_STATUS_TEXT[Number(job.current_stage)]
+      || JOB_STATUS_TEXT.processing;
+  }
+  return JOB_STATUS_TEXT[job.status] || job.status;
+}
+
+function jobGroupKey(job) {
+  if (job.status !== "processing") {
+    return job.status;
+  }
+  const stage = Number(job.current_stage);
+  return PROCESS_ACTIVE_STATUS_TEXT[stage]
+    ? `stage-${stage}`
+    : "stage-1";
+}
+
 function createJobRow(job) {
   const row = document.createElement("div");
   row.className = `job-row job-${job.status}`;
@@ -1284,7 +1752,7 @@ function createJobRow(job) {
 
   const badge = document.createElement("span");
   badge.className = `job-status-badge ${job.status}`;
-  badge.textContent = JOB_STATUS_TEXT[job.status] || job.status;
+  badge.textContent = jobStatusLabel(job);
 
   const detail = document.createElement("span");
   detail.className = "job-detail";
@@ -1303,7 +1771,7 @@ function createJobRow(job) {
   } else if ((job.current_operations || []).length > 0) {
     const current = job.current_operations[0];
     detail.textContent =
-      `O${current.operation_id} · M${current.machine_id} · ${progress}`;
+      `O${operationDisplayIndex(current)} · M${current.machine_id} · ${progress}`;
   } else {
     detail.textContent = `等待加工 · ${progress}`;
   }
@@ -1312,27 +1780,28 @@ function createJobRow(job) {
 }
 
 function ensureJobGroup(group) {
-  if (app.jobGroups.has(group.status)) {
-    return app.jobGroups.get(group.status);
+  if (app.jobGroups.has(group.key)) {
+    return app.jobGroups.get(group.key);
   }
 
   const details = document.createElement("details");
-  details.className = `job-group job-group-${group.status}`;
+  details.className = `job-group job-group-${group.className}`;
+  details.dataset.jobStage = group.stage || group.key;
   details.open =
-    app.jobGroupOpen[group.status]
-    ?? DEFAULT_JOB_GROUP_OPEN[group.status];
+    app.jobGroupOpen[group.key]
+    ?? DEFAULT_JOB_GROUP_OPEN[group.key];
 
   const summary = document.createElement("summary");
   summary.className = "job-group-summary";
   const label = document.createElement("span");
   label.className = "job-group-label";
-  label.textContent = JOB_STATUS_TEXT[group.status] || group.label;
+  label.textContent = group.label;
   const count = document.createElement("span");
   count.className = "job-group-count";
   count.textContent = "0";
   summary.append(label, count);
   summary.addEventListener("click", () => {
-    app.jobGroupOpen[group.status] = !details.open;
+    app.jobGroupOpen[group.key] = !details.open;
   });
 
   const body = document.createElement("div");
@@ -1340,7 +1809,7 @@ function ensureJobGroup(group) {
   details.append(summary, body);
   details.addEventListener("toggle", () => {
     if (details.isConnected) {
-      app.jobGroupOpen[group.status] = details.open;
+      app.jobGroupOpen[group.key] = details.open;
     }
   });
   elements.jobList.append(details);
@@ -1351,7 +1820,7 @@ function ensureJobGroup(group) {
     body,
     signature: null,
   };
-  app.jobGroups.set(group.status, entry);
+  app.jobGroups.set(group.key, entry);
   return entry;
 }
 
@@ -1364,7 +1833,7 @@ function renderJobStates(states) {
 
   for (const group of JOB_GROUPS) {
     const groupJobs = orderedStates.filter(
-      (job) => job.status === group.status,
+      (job) => jobGroupKey(job) === group.key,
     );
     const entry = ensureJobGroup(group);
     entry.count.textContent = String(groupJobs.length);
@@ -1372,6 +1841,7 @@ function renderJobStates(states) {
       groupJobs.map((job) => [
         job.job_id,
         job.status,
+        job.current_stage,
         job.operation_count,
         job.completed_operations,
         job.current_operations,
@@ -1408,7 +1878,7 @@ function cancelOptionDetail(job) {
   }
   if ((job.current_operations || []).length > 0) {
     const current = job.current_operations[0];
-    return `O${current.operation_id} · M${current.machine_id} · ${progress}`;
+    return `O${operationDisplayIndex(current)} · M${current.machine_id} · ${progress}`;
   }
   return `等待加工 · ${progress}`;
 }
@@ -1667,14 +2137,14 @@ function createPendingChip(operation) {
     operation.operation_id,
   );
   chip.style.setProperty("--chip-hue", jobHue(operation.job_id));
-  chip.textContent = `J${operation.job_id}-O${operation.operation_id}`;
+  chip.textContent = operationDisplayName(operation);
   updatePendingChip(chip, operation);
   return chip;
 }
 
 function updatePendingChip(chip, operation) {
   chip.title =
-    `待加工：作业 ${operation.job_id} / 工序 ${operation.operation_id} / `
+    `待加工：${operationDisplayTitle(operation)} / `
     + `计划 ${operation.start_time}-${operation.end_time}`;
 }
 
@@ -1699,7 +2169,16 @@ function addPendingLeaveAnimation(chip, queue) {
   window.setTimeout(() => ghost.remove(), 340);
 }
 
-function renderPendingQueues(plan, currentTime) {
+function renderPendingQueues(plan, currentTime, force = false) {
+  const renderNow = performance.now();
+  if (
+    !force
+    && app.status === "running"
+    && renderNow - app.lastPendingQueueRenderAt < 450
+  ) {
+    return;
+  }
+  app.lastPendingQueueRenderAt = renderNow;
   const queues = new Map();
   const activePlan = (
     app.status === "finished" || app.status === "failed"
@@ -1735,27 +2214,6 @@ function renderPendingQueues(plan, currentTime) {
       (left, right) => left.start_time - right.start_time,
     );
     const railWidth = lane.pendingQueue.clientWidth || 420;
-    const signature = pending
-      .map((operation) => {
-        const key = operationKey(
-          operation.job_id,
-          operation.operation_id,
-        );
-        return [
-          key,
-          operation.start_time,
-          operation.end_time,
-          operation.transport_start,
-          operation.transport_end,
-          operation.status,
-        ].join(":");
-      })
-      .concat(`@${app.displayPercent}@${railWidth}`)
-      .join("|");
-    if (app.pendingSignatures.get(machineId) === signature) {
-      continue;
-    }
-
     const chipWidth = 78 * (app.displayPercent / 100) + 6;
     const visibleCount = Math.max(
       1,
@@ -1765,6 +2223,26 @@ function renderPendingQueues(plan, currentTime) {
     const visibleKeys = visibleOperations.map((operation) =>
       operationKey(operation.job_id, operation.operation_id)
     );
+    const signature = [
+      ...visibleKeys,
+      `count:${pending.length}`,
+      `display:${app.displayPercent}`,
+      `width:${railWidth}`,
+    ].join("|");
+    if (app.pendingSignatures.get(machineId) === signature) {
+      for (const operation of visibleOperations) {
+        const chip = lane.pendingQueue.querySelector(
+          `[data-pending-key="${operationKey(
+            operation.job_id,
+            operation.operation_id,
+          )}"]`,
+        );
+        if (chip) {
+          updatePendingChip(chip, operation);
+        }
+      }
+      continue;
+    }
     const desiredKeys = new Set(visibleKeys);
     const oldChips = [
       ...lane.pendingQueue.querySelectorAll(
@@ -1839,8 +2317,32 @@ function eventDescription(event) {
   if (event.job_ids?.length) {
     return `作业 ${event.job_ids.join("、")}`;
   }
+  if (
+    event.type === "MaterialReplenishmentEvent"
+    || event.type === "MaterialRecoveryEvent"
+  ) {
+    const shortageText = formatMaterialEventMap(
+      event.shortage_materials,
+    );
+    const orderText = formatMaterialEventMap(
+      event.replenishment_materials,
+    );
+    const targetText = formatMaterialEventMap(event.target_materials);
+    const addedText = formatMaterialEventMap(event.added_materials);
+    const availableText = formatMaterialEventMap(
+      event.available_materials,
+    );
+    const details = [
+      shortageText ? `缺口 ${shortageText}` : "",
+      targetText ? `阈值 ${targetText}` : "",
+      orderText ? `待补 ${orderText}` : "",
+      addedText ? `已补 ${addedText}` : "",
+      availableText ? `当前 ${availableText}` : "",
+    ].filter(Boolean).join(" / ");
+    return `作业 ${event.job_id} / S${event.stage_id ?? 1}-O${operationDisplayIndex(event)} / M${event.machine_id}${details ? ` / ${details}` : ""}`;
+  }
   if (event.job_id !== undefined && event.operation_id !== undefined) {
-    return `作业 ${event.job_id} / 工序 ${event.operation_id} / M${event.machine_id ?? "-"}`;
+    return `作业 ${event.job_id} / S${event.stage_id ?? 1}-O${operationDisplayIndex(event)} / M${event.machine_id ?? "-"}`;
   }
   if (event.machine_id !== undefined && event.anomaly_type) {
     return `机器 M${event.machine_id} / ${event.anomaly_type}`;
@@ -1851,6 +2353,18 @@ function eventDescription(event) {
   return "";
 }
 
+function formatMaterialEventMap(materials) {
+  if (!materials || typeof materials !== "object") {
+    return "";
+  }
+  return Object.entries(materials)
+    .map(([materialId, quantity]) => {
+      const info = materialDisplayInfo(materialId);
+      return `${info.name} ${formatMaterialQuantity(quantity)}${info.unit}`;
+    })
+    .join("、");
+}
+
 function addAnomalyEvent(event) {
   const empty = elements.anomalyList.querySelector(".empty-state");
   if (empty) {
@@ -1859,6 +2373,12 @@ function addAnomalyEvent(event) {
 
   const row = document.createElement("div");
   row.className = "event-row";
+  if (
+    event.type === "MaterialReplenishmentEvent"
+    || event.type === "MaterialRecoveryEvent"
+  ) {
+    row.classList.add("material-event");
+  }
   const typeLabel = EVENT_TEXT[event.type] || event.type;
   row.innerHTML = `
     <span class="event-time">T+${formatTime(event.timestamp)}</span>
@@ -1884,6 +2404,12 @@ function handleOperationEvent(event) {
   ) {
     return;
   }
+  if (
+    event.stage_id !== undefined
+    && Number(event.stage_id) !== Number(app.activeProcessId)
+  ) {
+    return;
+  }
 
   const key = operationKey(event.job_id, event.operation_id);
   let bar = app.bars.get(key);
@@ -1891,6 +2417,8 @@ function handleOperationEvent(event) {
     bar = ensureBar({
       job_id: event.job_id,
       operation_id: event.operation_id,
+      stage_id: event.stage_id,
+      stage_operation_id: event.stage_operation_id,
       machine_id: event.machine_id,
       start_time: event.timestamp,
       end_time: event.timestamp + (event.processing_time || 0),
@@ -1929,7 +2457,8 @@ function setStatus(status) {
     || status === "reoptimizing";
   elements.reoptimizerSelect.disabled = status !== "running";
   elements.reoptimizeButton.disabled = status !== "running";
-  elements.insertAnomalyButton.disabled = status !== "running";
+  elements.insertAnomalyButton.disabled =
+    !app.anomalyHandlingEnabled || status !== "running";
   elements.manualJobInsertButton.disabled = status !== "running";
   elements.cancelJobsButton.disabled = status !== "running";
   elements.pauseButton.disabled =
@@ -1975,8 +2504,9 @@ function updateReoptimizeButtonText() {
   if (app.status === "reoptimizing") {
     return;
   }
+  const processName = currentProcessDefinition().name || "";
   elements.reoptimizeButton.textContent =
-    selectedReoptimizer().buttonLabel;
+    `${selectedReoptimizer().buttonLabel}${processName ? ` · ${processName}` : ""}`;
 }
 
 async function reoptimizeWithSelectedMethod() {
@@ -1988,7 +2518,10 @@ async function reoptimizeWithSelectedMethod() {
     const response = await fetch(optimizer.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(optimizer.payload),
+      body: JSON.stringify({
+        ...optimizer.payload,
+        process_id: Number(app.activeProcessId),
+      }),
     });
     const result = await response.json();
     if (!response.ok || !result.success) {
@@ -2015,6 +2548,15 @@ function normalizeWebSpeed(speed) {
   return [1, 2, 5].includes(numericSpeed) ? numericSpeed : 5;
 }
 
+function snapshotRequiresTimelineRebuild(snapshot) {
+  if (app.planRevision === null) {
+    return true;
+  }
+  return (snapshot.events || []).some((event) =>
+    TIMELINE_REBUILD_EVENT_TYPES.has(event.type)
+  );
+}
+
 function applySnapshot(snapshot) {
   if (app.generation !== null && app.generation !== snapshot.generation) {
     resetView();
@@ -2024,6 +2566,19 @@ function applySnapshot(snapshot) {
     elements.datasetSelect.value = snapshot.selected_dataset.id;
   }
   app.speed = normalizeWebSpeed(snapshot.speed);
+  if (snapshot.processes?.length) {
+    syncProcessCatalog(snapshot.processes);
+  }
+  app.latestSnapshot = snapshot;
+  app.processPlans = new Map(
+    Object.entries(snapshot.process_plans || {}),
+  );
+  app.processMachineStates = new Map(
+    Object.entries(snapshot.process_machine_states || {}),
+  );
+  if (snapshot.material_catalog) {
+    app.materialCatalog = snapshot.material_catalog;
+  }
   const serverTime = Number(snapshot.current_time || 0);
   if (
     snapshot.status === "running"
@@ -2043,14 +2598,37 @@ function applySnapshot(snapshot) {
   }
 
   updateHorizon(Number(snapshot.horizon || 100));
-  if (app.planRevision !== snapshot.plan_revision) {
+  const timelineRebuildRequired =
+    snapshotRequiresTimelineRebuild(snapshot);
+  const planRevisionChanged =
+    app.planRevision !== snapshot.plan_revision;
+  if (timelineRebuildRequired) {
     app.planRevision = snapshot.plan_revision;
-    renderPlan(snapshot.plan);
+    renderActiveProcessSchedule();
+  } else {
+    app.planRevision = snapshot.plan_revision;
+    const processId = String(app.activeProcessId);
+    const activePlan = app.processPlans.get(processId)
+      || snapshot.plan
+      || [];
+    const activeMachineStates = app.processMachineStates.get(processId)
+      || snapshot.machine_states
+      || [];
+    syncTransportPlan(activePlan);
+    updateMachineStates(activeMachineStates);
+    renderPendingQueues(
+      activePlan,
+      snapshot.current_time,
+      planRevisionChanged
+      || ["finished", "failed", "stopped"].includes(snapshot.status),
+    );
   }
   renderAxis();
   renderOrderBatches(snapshot.order_batches);
   renderJobStates(snapshot.job_states);
-  updateMachineStates(snapshot.machine_states);
+  if (app.activeTab === "material-board") {
+    renderMaterialInventoryBoard();
+  }
 
   for (const event of snapshot.events) {
     handleOperationEvent(event);
@@ -2074,10 +2652,10 @@ function applySnapshot(snapshot) {
       : String(Math.round(Number(snapshot.objectives.penalty)));
   setStatus(snapshot.status);
   refreshBarStates(app.currentTime);
-  renderPendingQueues(snapshot.plan, app.serverTime);
   renderPlayhead();
   syncAutoJobSubmission(snapshot.auto_job_submission);
   syncAutoMachineAnomaly(snapshot.auto_machine_anomaly);
+  syncAnomalyHandling(snapshot.anomaly_handling);
 
   elements.errorBanner.classList.toggle("hidden", !snapshot.error);
   if (snapshot.error) {
@@ -2153,6 +2731,12 @@ async function loadDatasets() {
       option.title = dataset.id;
       option.selected = dataset.id === result.default_dataset;
       elements.datasetSelect.append(option);
+    }
+    const selectedDataset = app.datasetCatalog.find(
+      (dataset) => dataset.id === (result.default_dataset || elements.datasetSelect.value),
+    );
+    if (selectedDataset) {
+      syncProcessCatalog(selectedDataset.processes || []);
     }
     app.datasetsReady = true;
     setStatus(app.status);
@@ -2263,6 +2847,10 @@ async function changeAutoJobSubmission() {
 }
 
 async function changeAutoMachineAnomaly() {
+  if (!app.anomalyHandlingEnabled) {
+    elements.autoMachineAnomaly.checked = false;
+    return;
+  }
   const enabled = elements.autoMachineAnomaly.checked;
   try {
     const response = await fetch("/api/auto-machine-anomaly", {
@@ -2314,7 +2902,9 @@ function populateAnomalyMachines() {
   for (const machine of app.machineStates) {
     const option = document.createElement("option");
     option.value = String(machine.id);
-    option.textContent = `M${machine.id}`;
+    option.textContent = `M${machine.local_id ?? machine.id}`;
+    option.title =
+      `全局机器 ${machine.id} · 工艺 ${machine.stage_id ?? 1}`;
     option.disabled = machine.status === "failed"
       || machine.status === "repairing";
     elements.anomalyMachineSelect.append(option);
@@ -2355,7 +2945,7 @@ function syncAnomalyMachineAvailability() {
 }
 
 function openAnomalyDialog() {
-  if (app.status !== "running") {
+  if (!app.anomalyHandlingEnabled || app.status !== "running") {
     return;
   }
   populateAnomalyMachines();
@@ -2478,6 +3068,7 @@ function escapeHtml(value) {
 
 renderAxis();
 setStatus("idle");
+syncAnomalyHandling({ enabled: false });
 elements.scheduleTab.addEventListener(
   "click",
   () => setDashboardTab("schedule"),
@@ -2485,6 +3076,10 @@ elements.scheduleTab.addEventListener(
 elements.machineBoardTab.addEventListener(
   "click",
   () => setDashboardTab("machine-board"),
+);
+elements.materialBoardTab.addEventListener(
+  "click",
+  () => setDashboardTab("material-board"),
 );
 elements.startButton.addEventListener("click", startSimulation);
 elements.autoJobSubmit.addEventListener(
@@ -2563,6 +3158,12 @@ elements.reoptimizerSelect.addEventListener(
   updateReoptimizeButtonText,
 );
 elements.datasetSelect.addEventListener("change", () => {
+  const dataset = app.datasetCatalog.find(
+    (item) => item.id === elements.datasetSelect.value,
+  );
+  if (dataset) {
+    syncProcessCatalog(dataset.processes || []);
+  }
   clearDetectionStream();
 });
 elements.speedSelect.addEventListener("change", changeSpeed);

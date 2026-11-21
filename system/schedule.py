@@ -16,6 +16,8 @@ class PlannedOperation:
     transport_segments: list = field(default_factory=list)
     waiting_time: float = 0
     status: str = "scheduled"
+    stage_id: int | None = None
+    stage_operation_id: int | None = None
 
 
 class Schedule:

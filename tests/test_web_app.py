@@ -33,6 +33,29 @@ class WebAppTest(unittest.TestCase):
 
         self.assertEqual(manager.state.snapshot()["speed"], 2)
 
+    def test_anomaly_handling_is_disabled_by_default(self):
+        manager = SimulationManager(
+            config_path=DEFAULT_CONFIG_PATH,
+            speed=2,
+            realtime=False,
+        )
+
+        snapshot = manager.state.snapshot()
+        result = manager.handle_prediction_alarms(
+            5,
+            [{"machine_id": 0, "is_alarm": True}],
+        )
+
+        self.assertFalse(snapshot["anomaly_handling"]["enabled"])
+        self.assertEqual(
+            result["reason"],
+            "anomaly_handling_disabled",
+        )
+        with self.assertRaises(ValueError):
+            manager.handle_machine_anomaly(0, "short_failure", 3)
+        with self.assertRaises(ValueError):
+            manager.set_auto_machine_anomaly(True)
+
     def test_detection_proxy_endpoints(self):
         prediction_calls = []
 
@@ -86,13 +109,15 @@ class WebAppTest(unittest.TestCase):
                 self,
                 t,
                 predictions,
+                process_id=1,
             ):
                 alarm_calls.append(
-                    (t, predictions)
+                    (t, predictions, process_id)
                 )
                 return {
                     "success": True,
                     "t": t,
+                    "process_id": process_id,
                     "injected_machine_ids": [0],
                 }
 
@@ -144,6 +169,7 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(prediction_calls, [(85, 3)])
         self.assertEqual(alarm_calls[0][0], 85)
         self.assertTrue(alarm_calls[0][1][0]["is_alarm"])
+        self.assertEqual(alarm_calls[0][2], 1)
 
     def test_dashboard_contains_anomaly_list_and_injection_control(self):
         manager = SimpleNamespace(state=SimpleNamespace())
@@ -166,16 +192,47 @@ class WebAppTest(unittest.TestCase):
                 timeout=5,
             ) as response:
                 javascript = response.read().decode("utf-8")
+            with urllib.request.urlopen(
+                (
+                    "http://127.0.0.1:"
+                    f"{server.server_address[1]}/styles.css"
+                ),
+                timeout=5,
+            ) as response:
+                stylesheet = response.read().decode("utf-8")
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
 
         self.assertIn("异常列表", html)
+        self.assertIn(
+            "<title>生产调度实时监控</title>",
+            html,
+        )
+        self.assertNotIn(
+            "<title>生产调度实时仿真</title>",
+            html,
+        )
+        self.assertIn(
+            "Production Scheduling Real-time Monitoring",
+            html,
+        )
+        self.assertNotIn(
+            "Production Scheduling Digital Twin",
+            html,
+        )
         self.assertIn("工序调度", html)
         self.assertIn("设备状态看板", html)
         self.assertIn('id="schedule-tab"', html)
         self.assertIn('id="machine-board-tab"', html)
+        self.assertIn('id="process-tabs"', html)
+        self.assertNotIn('id="schedule-process-tabs"', html)
+        self.assertNotIn('id="machine-board-process-tabs"', html)
+        self.assertLess(
+            html.index('id="process-tabs"'),
+            html.index('id="schedule-tab"'),
+        )
         self.assertIn('id="machine-card-grid"', html)
         self.assertIn('/vendor/echarts.min.js', html)
         self.assertIn('id="order-list"', html)
@@ -202,13 +259,149 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("OrderCancelEvent", javascript)
         self.assertIn("MachineAnomalyEvent", javascript)
         self.assertIn("MachineRecoveryEvent", javascript)
-        self.assertIn("option.textContent = `M${machine.id}`", javascript)
+        self.assertIn(
+            "option.textContent = `M${machine.local_id ?? machine.id}`",
+            javascript,
+        )
         self.assertIn("app.planRevision !== snapshot.plan_revision", javascript)
+        self.assertIn("TIMELINE_REBUILD_EVENT_TYPES", javascript)
+        self.assertIn(
+            "function snapshotRequiresTimelineRebuild",
+            javascript,
+        )
+        self.assertIn(
+            "const timelineRebuildRequired =\n"
+            "    snapshotRequiresTimelineRebuild(snapshot);",
+            javascript,
+        )
         self.assertIn("Number.isInteger(duration)", javascript)
         self.assertIn("/api/auto-machine-anomaly", javascript)
+        self.assertIn("syncAnomalyHandling", javascript)
         self.assertIn("renderMachineDetectionBoard", javascript)
+        self.assertIn('id="material-board-tab"', html)
+        self.assertIn('id="material-board-view"', html)
+        self.assertIn("物料库存看板", html)
+        self.assertIn("renderMaterialInventoryBoard", javascript)
+        self.assertIn("function createMaterialInventoryCard", javascript)
+        self.assertIn(
+            'MaterialReplenishmentEvent: "物料异常 · 补料"',
+            javascript,
+        )
+        self.assertIn(
+            'MaterialRecoveryEvent: "物料异常 · 恢复"',
+            javascript,
+        )
+        self.assertIn(
+            '"MaterialReplenishmentEvent",\n'
+            '  "MaterialRecoveryEvent",\n'
+            "]);",
+            javascript,
+        )
+        self.assertIn("function formatMaterialEventMap", javascript)
+        self.assertIn('row.classList.add("material-event")', javascript)
+        self.assertIn(".event-row.material-event .event-dot", stylesheet)
+        self.assertIn('setDashboardTab("material-board")', javascript)
+        self.assertIn(
+            'root.style.setProperty("--board-scale", String(scale))',
+            javascript,
+        )
+        self.assertIn(
+            "--board-scale: 1;",
+            stylesheet,
+        )
+        self.assertIn(
+            "height: calc(190px * var(--board-scale));",
+            stylesheet,
+        )
+        self.assertIn(
+            "minmax(calc(300px * var(--board-scale)), 1fr)",
+            stylesheet,
+        )
+        self.assertIn(
+            ".process-navigation-row .process-tab {\n"
+            "  padding: 8px 14px;\n"
+            "  font-size: 14px;\n"
+            "}",
+            stylesheet,
+        )
+        self.assertIn(
+            ".view-tab {\n"
+            "  padding: 9px 14px;\n"
+            "  border-color: transparent;\n"
+            "  background: transparent;\n"
+            "  color: var(--muted);\n"
+            "  font-size: 17px;\n"
+            "  font-weight: 700;\n"
+            "}",
+            stylesheet,
+        )
+        self.assertIn("renderProcessTabs", javascript)
+        self.assertIn(
+            'processTabs: document.querySelector("#process-tabs")',
+            javascript,
+        )
+        self.assertIn(
+            "syncDetectionWithSimulation(app.status)",
+            javascript,
+        )
+        self.assertIn("renderActiveProcessSchedule", javascript)
+        self.assertIn("process_id=${app.detectionProcessId || 1}", javascript)
+        self.assertIn(
+            "process_id: Number(app.activeProcessId)",
+            javascript,
+        )
         self.assertIn("renderOrderBatches", javascript)
         self.assertIn("createOrderCard", javascript)
+        for job_group_label in (
+            "冲压中",
+            "焊装中",
+            "涂装中",
+            "总装中",
+            "已完成",
+            "已取消",
+        ):
+            self.assertIn(f'label: "{job_group_label}"', javascript)
+        self.assertIn("function jobGroupKey", javascript)
+        self.assertNotIn("waiting-segment", javascript)
+        self.assertIn("function operationDisplayName", javascript)
+        self.assertIn(
+            "bar.textContent = operationDisplayName(operation)",
+            javascript,
+        )
+        self.assertIn(
+            "chip.textContent = operationDisplayName(operation)",
+            javascript,
+        )
+        self.assertIn("transportPlanSignature", javascript)
+        self.assertIn("syncTransportPlan(activePlan)", javascript)
+        self.assertIn(
+            "renderPendingQueues(plan, app.serverTime, true)",
+            javascript,
+        )
+        self.assertIn(
+            "for (const operation of plan || []) {\n"
+            "    if (TIMELINE_OPERATION_STATUSES.has(operation.status)) {\n"
+            "      ensureBar(operation);\n"
+            "    }\n"
+            "  }\n"
+            "  syncTransportPlan(plan);",
+            javascript,
+        )
+        self.assertIn(
+            'const TIMELINE_OPERATION_STATUSES = new Set([\n'
+            '  "processing",\n'
+            '  "completed",\n'
+            "]);",
+            javascript,
+        )
+        self.assertIn(
+            "renderNow - app.lastPendingQueueRenderAt < 450",
+            javascript,
+        )
+        self.assertNotIn(
+            "chip.textContent = `J${operation.job_id}-O${operation.operation_id}`",
+            javascript,
+        )
         self.assertIn("cancel-order-checkbox", javascript)
         self.assertIn("selectedCancelOrderIds", javascript)
         self.assertIn("order_ids: orderIds", javascript)
@@ -249,6 +442,7 @@ class WebAppTest(unittest.TestCase):
             config_path=DEFAULT_CONFIG_PATH,
             speed=2,
             realtime=False,
+            anomaly_handling_enabled=True,
         )
         manager.simulator = SimpleNamespace(
             seed=42,
@@ -334,6 +528,7 @@ class WebAppTest(unittest.TestCase):
             config_path=DEFAULT_CONFIG_PATH,
             speed=2,
             realtime=False,
+            anomaly_handling_enabled=True,
         )
         manager.simulator = simulator
         manager.state.prepare(2)
@@ -374,6 +569,10 @@ class WebAppTest(unittest.TestCase):
             machine_state["anomaly_type"],
             expected_anomaly.value,
         )
+        self.assertIn("materials", machine_state)
+        self.assertTrue(machine_state["materials"])
+        snapshot = manager.state.snapshot()
+        self.assertTrue(snapshot["material_catalog"])
 
     def test_drl_scheduler_can_be_preloaded_and_reused(self):
         created = []
@@ -443,7 +642,7 @@ class WebAppTest(unittest.TestCase):
                 log_dir=temp_dir,
             )
             started = manager.start(manager.default_dataset_id)
-            manager.thread.join(timeout=10)
+            manager.thread.join(timeout=30)
 
         self.assertTrue(started)
         self.assertFalse(manager.thread.is_alive())
@@ -742,8 +941,19 @@ class WebAppTest(unittest.TestCase):
         class FakeManager:
             state = SimpleNamespace()
 
-            def hls_reoptimize(self, seed=0, **options):
-                calls.append({"seed": seed, **options})
+            def hls_reoptimize(
+                self,
+                seed=0,
+                process_id=1,
+                **options,
+            ):
+                calls.append(
+                    {
+                        "seed": seed,
+                        "process_id": process_id,
+                        **options,
+                    }
+                )
                 return {"success": True, "optimizer": "hls"}
 
         server, thread = create_dashboard_server(
@@ -760,6 +970,7 @@ class WebAppTest(unittest.TestCase):
                 data=json.dumps(
                     {
                         "seed": 9,
+                        "process_id": 3,
                         "total_time_seconds": 2,
                         "population_size": 12,
                     }
@@ -780,6 +991,7 @@ class WebAppTest(unittest.TestCase):
             [
                 {
                     "seed": 9,
+                    "process_id": 3,
                     "total_time_seconds": 2,
                     "population_size": 12,
                 }
@@ -792,8 +1004,19 @@ class WebAppTest(unittest.TestCase):
         class FakeManager:
             state = SimpleNamespace()
 
-            def reoptimize_command(self, method, config):
-                calls.append({"method": method, "config": config})
+            def reoptimize_command(
+                self,
+                method,
+                config,
+                process_id=1,
+            ):
+                calls.append(
+                    {
+                        "method": method,
+                        "config": config,
+                        "process_id": process_id,
+                    }
+                )
                 return {
                     "success": True,
                     "optimizer": str(method).lower(),
@@ -813,6 +1036,7 @@ class WebAppTest(unittest.TestCase):
                 data=json.dumps(
                     {
                         "method": "DRL",
+                        "process_id": 2,
                         "config": {
                             "num_samples": 2,
                             "seed": 5,
@@ -836,6 +1060,7 @@ class WebAppTest(unittest.TestCase):
                 {
                     "method": "DRL",
                     "config": {"num_samples": 2, "seed": 5},
+                    "process_id": 2,
                 }
             ],
         )

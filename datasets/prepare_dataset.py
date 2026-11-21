@@ -6,8 +6,8 @@ multi-objective metadata. This script:
 
 1. converts machine identifiers to the one-based convention used by env/load_data.py;
 2. excludes instances containing zero processing times, which the loader treats as unavailable;
-3. creates deterministic processing energy, job feature and transport data;
-4. writes paired files under raw/ and add/ plus a complete manifest.
+3. creates deterministic processing energy, delivery-cost and transport data;
+4. writes raw/add plus one shared delivery_cost file per instance and a manifest.
 
 The original .txt files are never modified.
 """
@@ -25,7 +25,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 RAW_DIR = ROOT / "raw"
 ADD_DIR = ROOT / "add"
+DELIVERY_COST_DIR = ROOT / "delivery_cost"
 MANIFEST_PATH = ROOT / "manifest.json"
+DELIVERY_HEADER = (
+    "# priority ready_time due_time earliness_cost tardiness_cost"
+)
 
 
 class UnsupportedInstanceError(ValueError):
@@ -113,7 +117,7 @@ def parse_instance(source: Path) -> dict[str, Any]:
 
 def make_additional_data(
     parsed: dict[str, Any], seed: int
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     rng = random.Random(seed)
     num_jobs = parsed["num_jobs"]
     num_machines = parsed["num_machines"]
@@ -160,7 +164,7 @@ def make_additional_data(
     matrix_rows.extend(
         " ".join(str(value) for value in row) for row in transport_energy
     )
-    return energy_rows + feature_rows, matrix_rows
+    return energy_rows, feature_rows, matrix_rows
 
 
 def sha256(path: Path) -> str:
@@ -170,7 +174,10 @@ def sha256(path: Path) -> str:
 def write_dataset(source: Path) -> dict[str, Any]:
     parsed = parse_instance(source)
     seed = int(hashlib.sha256(source.name.encode("utf-8")).hexdigest()[:16], 16)
-    energy_rows, matrix_rows = make_additional_data(parsed, seed)
+    energy_rows, feature_rows, matrix_rows = make_additional_data(
+        parsed,
+        seed,
+    )
 
     raw_rows = ["\t".join(str(value) for value in parsed["header"])]
     for operations in parsed["jobs"]:
@@ -185,9 +192,15 @@ def write_dataset(source: Path) -> dict[str, Any]:
     output_name = source.with_suffix(".fjs").name
     raw_path = RAW_DIR / output_name
     add_path = ADD_DIR / output_name
+    delivery_path = DELIVERY_COST_DIR / output_name
     raw_path.write_text("\n".join(raw_rows) + "\n", encoding="utf-8")
     add_path.write_text(
-        "\n".join(energy_rows + matrix_rows) + "\n", encoding="utf-8"
+        "\n".join(energy_rows + matrix_rows) + "\n",
+        encoding="utf-8",
+    )
+    delivery_path.write_text(
+        DELIVERY_HEADER + "\n" + "\n".join(feature_rows) + "\n",
+        encoding="utf-8",
     )
 
     return {
@@ -195,8 +208,12 @@ def write_dataset(source: Path) -> dict[str, Any]:
         "source_sha256": sha256(source),
         "raw": f"raw/{raw_path.name}",
         "add": f"add/{add_path.name}",
+        "delivery_cost": (
+            f"delivery_cost/{delivery_path.name}"
+        ),
         "raw_sha256": sha256(raw_path),
         "add_sha256": sha256(add_path),
+        "delivery_cost_sha256": sha256(delivery_path),
         "family": source.name.split(".", 1)[0],
         "benchmark": source.name.split(".")[1],
         "num_jobs": parsed["num_jobs"],
@@ -214,6 +231,7 @@ def main() -> None:
 
     RAW_DIR.mkdir(exist_ok=True)
     ADD_DIR.mkdir(exist_ok=True)
+    DELIVERY_COST_DIR.mkdir(parents=True, exist_ok=True)
     instances = []
     skipped = []
     errors = []
@@ -239,23 +257,36 @@ def main() -> None:
     expected_file_names = {
         source.with_suffix(".fjs").name for source in sources
     } - {Path(item["source"]).with_suffix(".fjs").name for item in skipped}
-    for output_dir in (RAW_DIR, ADD_DIR):
+    for output_dir in (RAW_DIR, ADD_DIR, DELIVERY_COST_DIR):
         for output_path in output_dir.glob("*.fjs"):
             if output_path.name not in expected_file_names:
                 output_path.unlink()
     generated_raw = {path.stem + ".txt" for path in RAW_DIR.glob("*.fjs")}
     generated_add = {path.stem + ".txt" for path in ADD_DIR.glob("*.fjs")}
-    if expected != generated_raw or expected != generated_add:
-        raise SystemExit("Generated raw/add files do not match the supported source set")
+    generated_delivery = {
+        path.stem + ".txt" for path in DELIVERY_COST_DIR.glob("*.fjs")
+    }
+    if (
+        expected != generated_raw
+        or expected != generated_add
+        or expected != generated_delivery
+    ):
+        raise SystemExit(
+            "Generated raw/add/delivery-cost files do not match "
+            "the supported source set"
+        )
 
     shape_counts = Counter(
         (item["num_jobs"], item["num_machines"]) for item in instances
     )
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "layout": {
             "raw": "raw/<name>.fjs",
             "add": "add/<name>.fjs",
+            "delivery_cost": (
+                "delivery_cost/<name>.fjs"
+            ),
             "machine_id_convention": "one-based",
         },
         "generation_rules": {
@@ -267,6 +298,13 @@ def main() -> None:
             "earliness_penalty_range": [1, 10],
             "tardiness_penalty_range": [1, 10],
             "due_time": "ready_time + int(sum(operation_mean_processing_time) * 1.5)",
+            "delivery_cost_fields": [
+                "priority",
+                "ready_time",
+                "due_time",
+                "earliness_cost",
+                "tardiness_cost",
+            ],
             "transport_time_range_off_diagonal": [1, 3],
             "transport_energy_range_off_diagonal": [1, 4],
             "randomness": "deterministic SHA-256 seed derived from source filename",
@@ -290,7 +328,8 @@ def main() -> None:
     )
     print(
         f"Prepared {len(instances)} instances and excluded {len(skipped)}: "
-        f"{RAW_DIR} and {ADD_DIR}; manifest={MANIFEST_PATH}"
+        f"{RAW_DIR}, {ADD_DIR} and {DELIVERY_COST_DIR}; "
+        f"manifest={MANIFEST_PATH}"
     )
 
 

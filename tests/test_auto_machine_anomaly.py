@@ -17,6 +17,7 @@ class AutoMachineAnomalyTest(unittest.TestCase):
             config_path=DEFAULT_CONFIG_PATH,
             speed=10,
             realtime=False,
+            anomaly_handling_enabled=True,
         )
         manager.simulator = simulator
         manager.selected_source = manager.datasets_by_id[

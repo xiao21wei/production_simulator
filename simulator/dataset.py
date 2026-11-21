@@ -1,7 +1,17 @@
+import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
 from system.job import Job, Task
+
+
+PROCESS_STAGE_DEFINITIONS = (
+    (1, "冲压", "raw", "add", 0),
+    (2, "焊装", "raw1", "add1", 1800),
+    (3, "涂装", "raw2", "add2", 3600),
+    (4, "总装", "raw3", "add3", 5400),
+)
 
 
 class DatasetValidationError(ValueError):
@@ -12,6 +22,7 @@ class DatasetValidationError(ValueError):
 class MultiObjectiveDataset:
     raw_path: Path
     additional_path: Path
+    delivery_cost_path: Path | None
     num_jobs: int
     num_machines: int
     metadata: int
@@ -22,6 +33,124 @@ class MultiObjectiveDataset:
     @property
     def num_operations(self):
         return sum(job.operation_count for job in self.jobs)
+
+
+@dataclass(frozen=True)
+class ProcessMaterialData:
+    inventory: dict[int, dict[str, float]]
+    job_consumption: dict[int, dict[str, float]]
+    task_consumption: dict[int, dict[int, dict[str, float]]]
+
+
+def infer_delivery_cost_path(additional_path):
+    """Return the delivery-cost path associated with an add/addN file."""
+    additional_path = Path(additional_path)
+    if not additional_path.parent.name.startswith("add"):
+        return None
+    return (
+        additional_path.parent.parent
+        / "delivery_cost"
+        / additional_path.name
+    )
+
+
+def infer_process_id(additional_path):
+    """Return the process id represented by an add/addN directory."""
+    additional_path = Path(additional_path)
+    return next(
+        (
+            stage_id
+            for stage_id, _, _, add_dir, _ in PROCESS_STAGE_DEFINITIONS
+            if additional_path.parent.name == add_dir
+        ),
+        None,
+    )
+
+
+def infer_process_material_paths(additional_path):
+    """Return material inventory/consumption paths for an add/addN file."""
+    additional_path = Path(additional_path)
+    root = additional_path.parent.parent
+    process_id = infer_process_id(additional_path)
+    if process_id is None:
+        return None, None
+    config_name = additional_path.with_suffix(".json").name
+    process_dir = f"process_{process_id}"
+    inventory_path = (
+        root / "material_configs" / process_dir / config_name
+    )
+    consumption_path = (
+        root / "material_consumption" / process_dir / config_name
+    )
+    return (
+        inventory_path if inventory_path.is_file() else None,
+        consumption_path if consumption_path.is_file() else None,
+    )
+
+
+def list_process_sources(dataset_root, raw_path):
+    """Return the four process data sources for one scheduling instance."""
+    root = Path(dataset_root)
+    raw_path = Path(raw_path)
+    processes = []
+    machine_offset = 0
+    for stage_id, name, raw_dir, add_dir, detection_start in (
+        PROCESS_STAGE_DEFINITIONS
+    ):
+        stage_raw = (
+            raw_path
+            if stage_id == 1
+            else root / raw_dir / raw_path.name
+        )
+        stage_add = (
+            root / add_dir / raw_path.name
+            if stage_id > 1
+            else raw_path.parent.parent / "add" / raw_path.name
+        )
+        if not stage_raw.is_file() or not stage_add.is_file():
+            continue
+        try:
+            header = stage_raw.read_text(
+                encoding="utf-8"
+            ).splitlines()[0].split()
+            num_jobs = int(header[0])
+            num_machines = int(header[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        delivery_path = infer_delivery_cost_path(stage_add)
+        inventory_path, consumption_path = infer_process_material_paths(
+            stage_add
+        )
+        processes.append(
+            {
+                "id": stage_id,
+                "name": name,
+                "raw_file": str(stage_raw.resolve()),
+                "additional_file": str(stage_add.resolve()),
+                "delivery_cost_file": (
+                    str(delivery_path.resolve())
+                    if delivery_path is not None
+                    and delivery_path.is_file()
+                    else None
+                ),
+                "num_jobs": num_jobs,
+                "num_machines": num_machines,
+                "material_inventory_file": (
+                    str(inventory_path.resolve())
+                    if inventory_path is not None
+                    else None
+                ),
+                "material_consumption_file": (
+                    str(consumption_path.resolve())
+                    if consumption_path is not None
+                    else None
+                ),
+                "machine_offset": machine_offset,
+                "detection_start_t": detection_start,
+            }
+        )
+        machine_offset += num_machines
+    return processes
 
 
 def list_dataset_sources(dataset_root, default_raw_path=None):
@@ -50,6 +179,12 @@ def list_dataset_sources(dataset_root, default_raw_path=None):
             continue
 
         dataset_id = raw_path.stem
+        delivery_cost_path = infer_delivery_cost_path(additional_path)
+        if (
+            delivery_cost_path is not None
+            and not delivery_cost_path.is_file()
+        ):
+            delivery_cost_path = None
         sources.append(
             {
                 "id": dataset_id,
@@ -60,7 +195,13 @@ def list_dataset_sources(dataset_root, default_raw_path=None):
                 "num_machines": num_machines,
                 "raw_file": str(raw_path.resolve()),
                 "additional_file": str(additional_path.resolve()),
+                "delivery_cost_file": (
+                    str(delivery_cost_path.resolve())
+                    if delivery_cost_path is not None
+                    else None
+                ),
                 "is_default": raw_path.name == default_name,
+                "processes": list_process_sources(root, raw_path),
             }
         )
     return sources
@@ -80,9 +221,197 @@ def get_dataset_source(dataset_root, dataset_id):
     )
 
 
-def load_multi_objective_dataset(raw_path, additional_path):
+def load_process_material_data(
+    inventory_path,
+    consumption_path,
+    process_id,
+    num_jobs,
+    num_machines,
+    operation_counts=None,
+):
+    """Load and validate one process's inventory and consumption data."""
+    if inventory_path is None and consumption_path is None:
+        return ProcessMaterialData({}, {}, {})
+    if inventory_path is None or consumption_path is None:
+        raise DatasetValidationError(
+            "Material inventory and consumption files must both exist "
+            f"for process {process_id}."
+        )
+
+    inventory_path = Path(inventory_path)
+    consumption_path = Path(consumption_path)
+    inventory_doc = _load_json_object(
+        inventory_path,
+        "material inventory",
+    )
+    consumption_doc = _load_json_object(
+        consumption_path,
+        "material consumption",
+    )
+    for path, document in (
+        (inventory_path, inventory_doc),
+        (consumption_path, consumption_doc),
+    ):
+        if int(document.get("process_id", -1)) != process_id:
+            raise DatasetValidationError(
+                f"{path}: process_id must be {process_id}"
+            )
+
+    inventory = {}
+    for machine in _require_list(
+        inventory_doc.get("machines"),
+        f"{inventory_path}: machines",
+    ):
+        machine_id = _require_int(
+            machine.get("machine_id"),
+            f"{inventory_path}: machine_id",
+        )
+        if not 1 <= machine_id <= num_machines:
+            raise DatasetValidationError(
+                f"{inventory_path}: machine {machine_id} is outside "
+                f"1..{num_machines}"
+            )
+        if machine_id in inventory:
+            raise DatasetValidationError(
+                f"{inventory_path}: duplicate machine {machine_id}"
+            )
+        inventory[machine_id] = _parse_material_items(
+            machine.get("materials"),
+            f"{inventory_path}: machine {machine_id}",
+        )
+    expected_machine_ids = set(range(1, num_machines + 1))
+    if set(inventory) != expected_machine_ids:
+        missing = sorted(expected_machine_ids - set(inventory))
+        extra = sorted(set(inventory) - expected_machine_ids)
+        raise DatasetValidationError(
+            f"{inventory_path}: machine set mismatch; "
+            f"missing={missing}, extra={extra}"
+        )
+
+    job_consumption = {}
+    task_consumption = {}
+    seen_job_ids = set()
+    for job in _require_list(
+        consumption_doc.get("jobs"),
+        f"{consumption_path}: jobs",
+    ):
+        job_id = _require_int(
+            job.get("job_id"),
+            f"{consumption_path}: job_id",
+        )
+        if not 0 <= job_id < num_jobs:
+            raise DatasetValidationError(
+                f"{consumption_path}: job {job_id} is outside "
+                f"0..{num_jobs - 1}"
+            )
+        if job_id in seen_job_ids:
+            raise DatasetValidationError(
+                f"{consumption_path}: duplicate job {job_id}"
+            )
+        seen_job_ids.add(job_id)
+
+        if process_id == 1:
+            job_consumption[job_id] = _parse_material_items(
+                job.get("materials"),
+                f"{consumption_path}: job {job_id}",
+            )
+            continue
+
+        expected_operation_count = (
+            int(operation_counts[job_id])
+            if operation_counts is not None
+            else None
+        )
+        stage_tasks = {}
+        for task in _require_list(
+            job.get("tasks"),
+            f"{consumption_path}: job {job_id} tasks",
+        ):
+            operation_id = _require_int(
+                task.get("stage_operation_id"),
+                f"{consumption_path}: job {job_id} operation_id",
+            )
+            if operation_id < 0:
+                raise DatasetValidationError(
+                    f"{consumption_path}: job {job_id} has negative "
+                    "stage_operation_id"
+                )
+            if operation_id in stage_tasks:
+                raise DatasetValidationError(
+                    f"{consumption_path}: job {job_id} repeats "
+                    f"operation {operation_id}"
+                )
+            stage_tasks[operation_id] = _parse_material_items(
+                task.get("materials"),
+                (
+                    f"{consumption_path}: job {job_id} "
+                    f"operation {operation_id}"
+                ),
+            )
+        if (
+            expected_operation_count is not None
+            and set(stage_tasks)
+            != set(range(expected_operation_count))
+        ):
+            raise DatasetValidationError(
+                f"{consumption_path}: job {job_id} task set does not "
+                f"match {expected_operation_count} process operations"
+            )
+        task_consumption[job_id] = stage_tasks
+
+    expected_job_ids = set(range(num_jobs))
+    if seen_job_ids != expected_job_ids:
+        missing = sorted(expected_job_ids - seen_job_ids)
+        extra = sorted(seen_job_ids - expected_job_ids)
+        raise DatasetValidationError(
+            f"{consumption_path}: job set mismatch; "
+            f"missing={missing}, extra={extra}"
+        )
+
+    used_materials = {
+        material_id
+        for materials in job_consumption.values()
+        for material_id in materials
+    }
+    used_materials.update(
+        material_id
+        for tasks in task_consumption.values()
+        for materials in tasks.values()
+        for material_id in materials
+    )
+    for machine_id, materials in inventory.items():
+        missing = sorted(used_materials - set(materials))
+        if missing:
+            raise DatasetValidationError(
+                f"{inventory_path}: machine {machine_id} is missing "
+                f"material quantities for {missing}"
+            )
+
+    return ProcessMaterialData(
+        inventory=inventory,
+        job_consumption=job_consumption,
+        task_consumption=task_consumption,
+    )
+
+
+def load_multi_objective_dataset(
+    raw_path,
+    additional_path,
+    delivery_cost_path=None,
+):
     raw_path = Path(raw_path)
     additional_path = Path(additional_path)
+    if delivery_cost_path is None:
+        delivery_cost_path = infer_delivery_cost_path(additional_path)
+    else:
+        delivery_cost_path = Path(delivery_cost_path)
+    if (
+        delivery_cost_path is not None
+        and not delivery_cost_path.is_file()
+    ):
+        raise DatasetValidationError(
+            f"Delivery-cost dataset not found: {delivery_cost_path}"
+        )
     raw_lines = _read_nonempty_lines(raw_path)
     additional_lines = _read_nonempty_lines(additional_path)
 
@@ -126,10 +455,9 @@ def load_multi_objective_dataset(raw_path, additional_path):
             )
         )
 
-    feature_start = num_jobs
-    if len(additional_lines) < feature_start + num_jobs:
+    if len(additional_lines) < num_jobs:
         raise DatasetValidationError(
-            f"{additional_path}: missing processing energy or job feature rows"
+            f"{additional_path}: missing processing energy rows"
         )
 
     parsed_energies = []
@@ -145,6 +473,31 @@ def load_multi_objective_dataset(raw_path, additional_path):
                 require_positive=False,
             )
         )
+
+    if delivery_cost_path is not None:
+        feature_lines = [
+            line
+            for line in _read_nonempty_lines(delivery_cost_path)
+            if not line.startswith("#")
+        ]
+        if len(feature_lines) != num_jobs:
+            raise DatasetValidationError(
+                f"{delivery_cost_path}: expected {num_jobs} delivery rows, "
+                f"found {len(feature_lines)}"
+            )
+        feature_source = delivery_cost_path
+        matrix_start = num_jobs
+    else:
+        feature_start = num_jobs
+        if len(additional_lines) < feature_start + num_jobs:
+            raise DatasetValidationError(
+                f"{additional_path}: missing embedded job feature rows"
+            )
+        feature_lines = additional_lines[
+            feature_start:feature_start + num_jobs
+        ]
+        feature_source = additional_path
+        matrix_start = feature_start + num_jobs
 
     jobs = []
     task_id = 0
@@ -197,16 +550,16 @@ def load_multi_objective_dataset(raw_path, additional_path):
         for operation_id in range(operation_count - 1):
             tasks[operation_id].successor_id = tasks[operation_id + 1].task_id
 
-        feature_line_number = feature_start + job_id + 1
+        feature_line_number = job_id + 1
         features = _parse_numbers(
-            additional_lines[feature_start + job_id],
+            feature_lines[job_id],
             f"job {job_id} features",
-            additional_path,
+            feature_source,
             feature_line_number,
         )
         if len(features) != 5:
             raise DatasetValidationError(
-                f"{additional_path}:{feature_line_number}: job {job_id} "
+                f"{feature_source}:{feature_line_number}: job {job_id} "
                 "must contain exactly 5 features: "
                 "weight ready_time due_time earliness_penalty "
                 "tardiness_penalty"
@@ -214,17 +567,17 @@ def load_multi_objective_dataset(raw_path, additional_path):
         weight, ready_time, due_time, early_penalty, tardy_penalty = features
         if weight <= 0:
             raise DatasetValidationError(
-                f"{additional_path}:{feature_line_number}: "
+                f"{feature_source}:{feature_line_number}: "
                 "job weight must be positive"
             )
         if ready_time < 0 or early_penalty < 0 or tardy_penalty < 0:
             raise DatasetValidationError(
-                f"{additional_path}:{feature_line_number}: "
+                f"{feature_source}:{feature_line_number}: "
                 "job ready time and penalties must be non-negative"
             )
         if due_time < ready_time:
             raise DatasetValidationError(
-                f"{additional_path}:{feature_line_number}: "
+                f"{feature_source}:{feature_line_number}: "
                 "job due time cannot be earlier than ready time"
             )
 
@@ -244,7 +597,6 @@ def load_multi_objective_dataset(raw_path, additional_path):
             )
         )
 
-    matrix_start = feature_start + num_jobs
     matrix_values = []
     for line in additional_lines[matrix_start:]:
         matrix_values.extend(
@@ -279,6 +631,7 @@ def load_multi_objective_dataset(raw_path, additional_path):
     return MultiObjectiveDataset(
         raw_path=raw_path,
         additional_path=additional_path,
+        delivery_cost_path=delivery_cost_path,
         num_jobs=num_jobs,
         num_machines=num_machines,
         metadata=metadata,
@@ -286,6 +639,124 @@ def load_multi_objective_dataset(raw_path, additional_path):
         transport_time=transport_time,
         transport_energy=transport_energy,
     )
+
+
+def load_model_additional_text(
+    raw_path,
+    additional_path,
+    delivery_cost_path=None,
+):
+    """Merge split delivery rows into the model-compatible add layout."""
+    raw_path = Path(raw_path)
+    additional_path = Path(additional_path)
+    if delivery_cost_path is None:
+        delivery_cost_path = infer_delivery_cost_path(additional_path)
+    elif delivery_cost_path is not None:
+        delivery_cost_path = Path(delivery_cost_path)
+    if (
+        delivery_cost_path is None
+        or not Path(delivery_cost_path).is_file()
+    ):
+        return additional_path.read_text(encoding="utf-8")
+
+    raw_lines = _read_nonempty_lines(raw_path)
+    additional_lines = _read_nonempty_lines(additional_path)
+    delivery_lines = [
+        line
+        for line in _read_nonempty_lines(delivery_cost_path)
+        if not line.startswith("#")
+    ]
+    num_jobs = int(raw_lines[0].split()[0])
+    if len(additional_lines) < num_jobs:
+        raise DatasetValidationError(
+            f"{additional_path}: missing processing energy rows"
+        )
+    if len(delivery_lines) != num_jobs:
+        raise DatasetValidationError(
+            f"{delivery_cost_path}: expected {num_jobs} delivery rows, "
+            f"found {len(delivery_lines)}"
+        )
+    merged_lines = (
+        additional_lines[:num_jobs]
+        + delivery_lines
+        + additional_lines[num_jobs:]
+    )
+    return "\n".join(merged_lines) + "\n"
+
+
+def _load_json_object(path, label):
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise DatasetValidationError(
+            f"{label} file not found: {path}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DatasetValidationError(
+            f"{path}: invalid {label} JSON"
+        ) from exc
+    if not isinstance(document, dict):
+        raise DatasetValidationError(
+            f"{path}: {label} root must be an object"
+        )
+    return document
+
+
+def _require_list(value, label):
+    if not isinstance(value, list):
+        raise DatasetValidationError(f"{label} must be a list")
+    return value
+
+
+def _require_int(value, label):
+    if isinstance(value, bool):
+        raise DatasetValidationError(f"{label} must be an integer")
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise DatasetValidationError(
+            f"{label} must be an integer"
+        ) from exc
+    if float(value) != number:
+        raise DatasetValidationError(f"{label} must be an integer")
+    return number
+
+
+def _parse_material_items(value, label):
+    materials = {}
+    for item in _require_list(value, label):
+        if not isinstance(item, dict):
+            raise DatasetValidationError(
+                f"{label}: each material entry must be an object"
+            )
+        material_id = item.get("material_id")
+        if not isinstance(material_id, str) or not material_id.strip():
+            raise DatasetValidationError(
+                f"{label}: material_id must be a non-empty string"
+            )
+        material_id = material_id.strip()
+        quantity = item.get("quantity")
+        if isinstance(quantity, bool):
+            raise DatasetValidationError(
+                f"{label}: quantity for {material_id} must be numeric"
+            )
+        try:
+            quantity = float(quantity)
+        except (TypeError, ValueError) as exc:
+            raise DatasetValidationError(
+                f"{label}: quantity for {material_id} must be numeric"
+            ) from exc
+        if not math.isfinite(quantity) or quantity < 0:
+            raise DatasetValidationError(
+                f"{label}: quantity for {material_id} must be finite "
+                "and non-negative"
+            )
+        if material_id in materials:
+            raise DatasetValidationError(
+                f"{label}: duplicate material {material_id}"
+            )
+        materials[material_id] = _number_value(quantity)
+    return materials
 
 
 def _read_nonempty_lines(path):
