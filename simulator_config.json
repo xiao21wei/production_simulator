@@ -18,20 +18,29 @@
     "due_time_factor": 1.2,
     "auxiliary_energy": 1,
     "process_stage_batch_window": 10.0,
-    "material_replenishment_lead_time": 5.0,
+    "material_replenishment_lead_time": 20.0,
     "material_replenishment_target_factor": 3.0
   },
   "anomaly_handling": {
-    "enabled": false
+    "enabled": true
   },
   "visualization": {
     "host": "0.0.0.0",
+    "public_host": "152.136.171.71",
     "port": 8000,
     "speed": 2.0,
     "display_percent": 100
   },
   "detection_data": {
-    "base_url": "http://192.168.1.68:8068",
+    "base_url": "http://127.0.0.1:8068",
+    "process_base_urls": {
+      "1": "http://127.0.0.1:8068",
+      "2": "http://127.0.0.1:8078"
+    },
+    "process_protocols": {
+      "1": "legacy",
+      "2": "mfddt"
+    },
     "timeout": 10,
     "history_points": 60,
     "poll_interval_ms": 1000,

@@ -78,6 +78,53 @@ class MachineDetectionDataTest(unittest.TestCase):
                     "error": None,
                 },
             }
+        if path == "/api/v1/window":
+            return {
+                "machine_id": int(query["machine_id"]),
+                "t": int(query["t"]),
+                "t_effective": int(query["t"]) % 100,
+                "T": 100,
+                "window": {
+                    "features": list(DETECTION_FIELDS),
+                    "data": [
+                        [index + row for index in range(15)]
+                        for row in range(100)
+                    ],
+                },
+            }
+        if path == "/api/v1/truth":
+            return {
+                "machine_id": int(query["machine_id"]),
+                "t": int(query["t"]),
+                "label": 1,
+                "warn": 1,
+                "next_anomaly_t": 90,
+            }
+        if path == "/api/v1/events":
+            return {
+                "machine_id": int(query["machine_id"]),
+                "T": 100,
+                "count": 1,
+                "events": [{"start": 85, "end": 90, "duration": 6}],
+            }
+        if path == "/api/v1/stream":
+            start = int(query["from_t"])
+            count = int(query["count"])
+            return {
+                "machine_id": int(query["machine_id"]),
+                "T": 100,
+                "prediction_horizon": 20,
+                "features": list(DETECTION_FIELDS),
+                "frames": [
+                    {
+                        "t": start + index,
+                        "label": int(start + index >= 85),
+                        "warn": 1,
+                        "values": {},
+                    }
+                    for index in range(count)
+                ],
+            }
         raise AssertionError(f"Unexpected endpoint: {path}")
 
     def test_metadata_only_requests_supported_endpoints(self):
@@ -93,8 +140,8 @@ class MachineDetectionDataTest(unittest.TestCase):
                 for item in meta["prediction_anomaly_options"]
             },
             {
-                "short_failure": 3,
-                "medium_failure": 10,
+                "short_failure": 10,
+                "medium_failure": 20,
                 "long_failure": 30,
                 "degraded": 15,
             },
@@ -147,6 +194,172 @@ class MachineDetectionDataTest(unittest.TestCase):
             3,
         )
         self.assertNotIn("/api/v1/stream", self.requested_paths)
+
+    def test_detailed_model_evidence_uses_legacy_endpoints(self):
+        window = self.provider.window(machine_id=2, t=85)
+        prediction = self.provider.predict_one(machine_id=2, t=85)
+        truth = self.provider.truth(machine_id=2, t=85)
+        events = self.provider.events(machine_id=2)
+        stream = self.provider.stream(
+            machine_id=2,
+            from_t=85,
+            count=20,
+        )
+
+        self.assertEqual(window["window"]["features"], list(DETECTION_FIELDS))
+        self.assertEqual(len(window["window"]["data"]), 100)
+        self.assertEqual(prediction["machine_id"], 2)
+        self.assertEqual(prediction["threshold"], 0.93)
+        self.assertEqual(truth["label"], 1)
+        self.assertEqual(events["events"][0]["start"], 85)
+        self.assertEqual(len(stream["frames"]), 20)
+        self.assertIn("/api/v1/window", self.requested_paths)
+        self.assertIn("/api/v1/truth", self.requested_paths)
+        self.assertIn("/api/v1/events", self.requested_paths)
+        self.assertIn("/api/v1/stream", self.requested_paths)
+
+
+class MfddtDetectionDataTest(unittest.TestCase):
+    def setUp(self):
+        self.provider = MachineDetectionDataProvider(
+            base_url="http://detection.test",
+            protocol="mfddt",
+            history_points=60,
+            poll_interval_ms=1000,
+        )
+        self.requests = []
+        self.provider._get_json = self._fake_get_json
+
+    def _fake_get_json(self, path, query=None):
+        self.requests.append((path, dict(query or {})))
+        if path == "/api/v1/meta":
+            return {
+                "service": "mfddt-anomaly-simulator",
+                "features_detail": [
+                    {
+                        "name": "ref",
+                        "index": 0,
+                        "label": "键相参考信号",
+                        "unit": "V",
+                        "agg_min": 0,
+                        "agg_max": 3.61,
+                    },
+                    {
+                        "name": "torque",
+                        "index": 1,
+                        "label": "电机转矩",
+                        "unit": "N·m",
+                        "agg_min": -0.6,
+                        "agg_max": 0.6,
+                    },
+                ],
+            }
+        if path == "/api/v1/machines":
+            return {
+                "machines": [
+                    {"machine_id": machine_id, "T": 4000}
+                    for machine_id in range(6)
+                ]
+            }
+        if path == "/api/v1/overview":
+            timestamp = int(query["t"])
+            count = int(query["machine_count"])
+            return {
+                "t": timestamp,
+                "features": ["ref", "torque"],
+                "machines": [
+                    {
+                        "machine_id": machine_id,
+                        "T": 4000,
+                        "t_effective": timestamp % 4000,
+                        "label": 1,
+                        "values": {
+                            "ref": 1.2,
+                            "torque": 0.4,
+                        },
+                    }
+                    for machine_id in range(count)
+                ],
+            }
+        if path == "/api/v1/detect/batch":
+            timestamp = int(query["t"])
+            count = int(query["machine_count"])
+            return {
+                "t": timestamp,
+                "results": [
+                    {
+                        "machine_id": machine_id,
+                        "t": timestamp,
+                        "t_effective": timestamp % 4000,
+                        "prediction": int(machine_id == 1),
+                        "is_alarm": machine_id == 1,
+                        "anomaly_score": (
+                            0.95 if machine_id == 1 else 0.1
+                        ),
+                        "severity_level": (
+                            "L3" if machine_id == 1 else "L0"
+                        ),
+                        "severity_name": (
+                            "严重" if machine_id == 1 else "正常"
+                        ),
+                        "anomaly_type": (
+                            "medium_failure"
+                            if machine_id == 1
+                            else "normal"
+                        ),
+                        "recommended_duration": (
+                            10 if machine_id == 1 else 0
+                        ),
+                    }
+                    for machine_id in range(count)
+                ],
+            }
+        raise AssertionError(f"Unexpected endpoint: {path}")
+
+    def test_mfddt_meta_and_overview_use_configured_channels(self):
+        meta = self.provider.meta()
+        overview = self.provider.overview(85, machine_count=6)
+
+        self.assertEqual(meta["protocol"], "mfddt")
+        self.assertEqual(
+            [field["name"] for field in meta["selected_features"]],
+            ["ref", "torque"],
+        )
+        self.assertEqual(overview["machines"][0]["label"], 0)
+        self.assertEqual(overview["machines"][0]["warn"], 0)
+        self.assertEqual(
+            overview["machines"][0]["values"],
+            {"ref": 1.2, "torque": 0.4},
+        )
+        overview_request = next(
+            query
+            for path, query in self.requests
+            if path == "/api/v1/overview"
+        )
+        self.assertEqual(overview_request["agg"], "default")
+
+    def test_mfddt_predict_uses_batch_detection(self):
+        payload = self.provider.predict(315, machine_count=6)
+
+        self.assertEqual(len(payload["predictions"]), 6)
+        self.assertTrue(payload["predictions"][1]["is_alarm"])
+        self.assertEqual(
+            payload["predictions"][1]["severity_level"],
+            "L3",
+        )
+        self.assertEqual(
+            payload["predictions"][1]["anomaly_type"],
+            "medium_failure",
+        )
+        self.assertEqual(
+            self.requests.count(("/api/v1/detect/batch", {
+                "t": 315,
+                "machine_count": 6,
+                "include_detail": "true",
+                "include_truth": "false",
+            })),
+            1,
+        )
 
 
 if __name__ == "__main__":

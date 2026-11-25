@@ -278,6 +278,42 @@ class DynamicJobTest(unittest.TestCase):
             2,
         )
 
+    def test_auto_submit_counts_unfinished_stamping_jobs(self):
+        simulator = self._create_simulator()
+        manager = SimulationManager(
+            config_path=DEFAULT_CONFIG_PATH,
+            speed=50,
+            realtime=False,
+        )
+        manager.simulator = simulator
+        manager.auto_job_submission_enabled = True
+        threshold = manager._auto_job_submission_threshold()
+        self.assertEqual(
+            manager._stamping_unfinished_job_count(),
+            simulator.initial_job_count,
+        )
+
+        for job in simulator.jobs[:-threshold]:
+            for task in job.tasks:
+                if getattr(task, "stage_id", 1) == 1:
+                    task.status = "completed"
+
+        self.assertEqual(
+            manager._stamping_unfinished_job_count(),
+            threshold,
+        )
+        submitted = []
+        manager.submit_random_jobs = (
+            lambda seed, order_source: submitted.append(
+                (seed, order_source)
+            )
+        )
+
+        manager._maybe_auto_submit_jobs()
+
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0][1], "auto")
+
     @staticmethod
     def _create_simulator():
         simulator = Simulator(realtime=False)

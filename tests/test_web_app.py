@@ -33,7 +33,7 @@ class WebAppTest(unittest.TestCase):
 
         self.assertEqual(manager.state.snapshot()["speed"], 2)
 
-    def test_anomaly_handling_is_disabled_by_default(self):
+    def test_anomaly_handling_is_enabled_by_default(self):
         manager = SimulationManager(
             config_path=DEFAULT_CONFIG_PATH,
             speed=2,
@@ -46,15 +46,17 @@ class WebAppTest(unittest.TestCase):
             [{"machine_id": 0, "is_alarm": True}],
         )
 
-        self.assertFalse(snapshot["anomaly_handling"]["enabled"])
+        self.assertTrue(snapshot["anomaly_handling"]["enabled"])
         self.assertEqual(
             result["reason"],
-            "anomaly_handling_disabled",
+            "simulation_not_running",
         )
         with self.assertRaises(ValueError):
-            manager.handle_machine_anomaly(0, "short_failure", 3)
-        with self.assertRaises(ValueError):
-            manager.set_auto_machine_anomaly(True)
+            manager.handle_machine_anomaly(0, "short_failure", 10)
+        auto_result = manager.set_auto_machine_anomaly(True)
+        self.assertTrue(
+            auto_result["auto_machine_anomaly"]["enabled"]
+        )
 
     def test_detection_proxy_endpoints(self):
         prediction_calls = []
@@ -103,7 +105,13 @@ class WebAppTest(unittest.TestCase):
             state = SimpleNamespace()
 
             def __init__(self):
-                self.detection_data = FakeDetectionData()
+                provider = FakeDetectionData()
+                self.detection_data = provider
+                self.detection_data_by_process = {1: provider, 2: provider}
+                self.detection_process_ids = {1, 2}
+
+            def detection_data_for_process(self, process_id=1):
+                return self.detection_data_by_process[int(process_id)]
 
             def handle_prediction_alarms(
                 self,
@@ -214,14 +222,100 @@ class WebAppTest(unittest.TestCase):
             "<title>生产调度实时仿真</title>",
             html,
         )
-        self.assertIn(
+        self.assertNotIn(
             "Production Scheduling Real-time Monitoring",
             html,
         )
+        self.assertNotIn("仿真", html)
+        self.assertNotIn("仿真", javascript)
         self.assertNotIn(
             "Production Scheduling Digital Twin",
             html,
         )
+        self.assertNotIn("ORDER / JOB STATUS", html)
+        self.assertNotIn("ANOMALY MONITOR", html)
+        self.assertIn(
+            'class="metrics" role="group" aria-label="关键指标"',
+            html,
+        )
+        self.assertIn('id="monitor-view-button"', html)
+        self.assertIn('id="model-test-view-button"', html)
+        self.assertIn('id="monitor-page"', html)
+        self.assertIn('id="model-test-page"', html)
+        self.assertIn('id="anomaly-model-tab"', html)
+        self.assertIn('id="hls-model-tab"', html)
+        self.assertIn('id="construction-model-tab"', html)
+        self.assertIn('id="anomaly-model-panel"', html)
+        self.assertIn('id="hls-model-panel"', html)
+        self.assertIn('id="construction-model-panel"', html)
+        self.assertIn("IAC 调度模型", html)
+        self.assertIn('id="anomaly-test-dataset-select"', html)
+        self.assertIn('id="anomaly-test-machine-select"', html)
+        self.assertIn('id="anomaly-test-model-name"', html)
+        self.assertIn('id="anomaly-model-contract"', html)
+        self.assertIn('id="anomaly-test-visualization"', html)
+        self.assertIn('id="anomaly-window-heatmap"', html)
+        self.assertIn('id="anomaly-key-signals-chart"', html)
+        self.assertIn('id="anomaly-future-labels"', html)
+        self.assertIn('id="anomaly-event-timeline"', html)
+        self.assertIn('id="hls-test-dataset-select"', html)
+        self.assertIn('id="hls-test-search-mode"', html)
+        self.assertIn('id="hls-test-random-strategy"', html)
+        self.assertIn('id="hls-test-max-repeat"', html)
+        self.assertIn('id="hls-test-max-iter"', html)
+        self.assertIn('id="hls-test-population"', html)
+        self.assertIn('id="hls-test-tabu-length"', html)
+        self.assertIn('id="construction-test-dataset-select"', html)
+        self.assertNotIn('id="construction-test-process-select"', html)
+        self.assertIn('id="construction-test-method-select"', html)
+        self.assertNotIn('id="hls-test-process-select"', html)
+        self.assertIn("范围：0–4294967295 · 默认：0", html)
+        self.assertIn("范围：1–300 · 默认：20", html)
+        self.assertIn("范围：0–1 · 默认：0.6", html)
+        self.assertIn("范围：≥2 · 默认：32", html)
+        self.assertIn('class="model-test-actions"', html)
+        self.assertIn('id="run-anomaly-model-test-button"', html)
+        self.assertIn('id="run-hls-model-test-button"', html)
+        self.assertIn('id="run-construction-model-test-button"', html)
+        self.assertIn('id="model-test-summary"', html)
+        self.assertIn('id="hls-gantt-section"', html)
+        self.assertIn('id="hls-gantt-chart"', html)
+        self.assertIn('id="model-test-raw-details"', html)
+        self.assertIn('id="model-test-output"', html)
+        self.assertNotIn("模型验证", html)
+        self.assertNotIn("运行异常检测", html)
+        self.assertNotIn("运行 HLS 调度测试", html)
+        self.assertEqual(html.count("运行测试"), 3)
+        self.assertIn("function setActivePage", javascript)
+        self.assertIn("function setModelTestTab", javascript)
+        self.assertIn("function runAnomalyModelTest", javascript)
+        self.assertIn("function renderAnomalyWindowHeatmap", javascript)
+        self.assertIn("function renderAnomalySignalChart", javascript)
+        self.assertIn("function renderAnomalyEvents", javascript)
+        self.assertIn("events[params.dataIndex]", javascript)
+        self.assertIn("function runHlsModelTest", javascript)
+        self.assertIn("function runConstructionModelTest", javascript)
+        self.assertIn("const processId = 1;", javascript)
+        self.assertIn("function showHlsModelResult", javascript)
+        self.assertIn("function showConstructionModelResult", javascript)
+        self.assertIn("function renderHlsGantt", javascript)
+        self.assertIn("emphasis: { disabled: true }", javascript)
+        self.assertIn("silent: true", javascript)
+        self.assertIn("tooltip: { show: false }", javascript)
+        self.assertIn("function handleHlsGanttMouseMove", javascript)
+        self.assertIn("chartNote,\n    severityBadge,", javascript)
+        self.assertIn('id="hls-gantt-tooltip"', html)
+        self.assertIn(".hls-gantt-tooltip {", stylesheet)
+        self.assertIn("pointer-events: none;", stylesheet)
+        self.assertIn(".page-switch-button.active", stylesheet)
+        self.assertIn(".model-test-page {", stylesheet)
+        self.assertIn(".model-test-summary-card", stylesheet)
+        self.assertIn(".anomaly-kpi-grid {", stylesheet)
+        self.assertIn(".anomaly-window-heatmap,", stylesheet)
+        self.assertIn(".model-test-gantt-chart", stylesheet)
+        self.assertIn("topbar.classList.toggle(\"model-test-mode\"", javascript)
+        self.assertIn(".topbar.model-test-mode .metrics", stylesheet)
+        self.assertIn(".topbar.model-test-mode .controls", stylesheet)
         self.assertIn("工序调度", html)
         self.assertIn("设备状态看板", html)
         self.assertIn('id="schedule-tab"', html)
@@ -229,6 +323,49 @@ class WebAppTest(unittest.TestCase):
         self.assertIn('id="process-tabs"', html)
         self.assertNotIn('id="schedule-process-tabs"', html)
         self.assertNotIn('id="machine-board-process-tabs"', html)
+        self.assertIn(
+            '<option value="greedy" selected>Greedy</option>',
+            html,
+        )
+        self.assertIn(
+            '<option value="influence_aware">IAC</option>',
+            html,
+        )
+        self.assertIn(
+            'endpoint: "/api/greedy-reoptimize"',
+            javascript,
+        )
+        self.assertIn(
+            'endpoint: "/api/influence-aware-reoptimize"',
+            javascript,
+        )
+        self.assertIn('buttonLabel: "IAC 重调度"', javascript)
+        self.assertIn(
+            'function constructionMethodDisplayName',
+            javascript,
+        )
+        self.assertIn(
+            "/api/model-test/construction",
+            javascript,
+        )
+        self.assertIn(
+            "function animateReoptimizationMoves",
+            javascript,
+        )
+        self.assertIn(
+            "/api/reoptimization-animation-complete",
+            javascript,
+        )
+        self.assertIn("wait_for_animation: true", javascript)
+        self.assertIn(".reoptimization-move-ghost {", stylesheet)
+        self.assertIn(".reoptimization-move-hud {", stylesheet)
+        self.assertIn(
+            ".pending-queue.reoptimization-queue-source {",
+            stylesheet,
+        )
+        self.assertIn("function pendingQueueSlotPoint", javascript)
+        self.assertIn("animating: \"队列调整动画 · 已暂停\"", javascript)
+        self.assertIn("|| REOPTIMIZERS.greedy", javascript)
         self.assertLess(
             html.index('id="process-tabs"'),
             html.index('id="schedule-tab"'),
@@ -248,9 +385,9 @@ class WebAppTest(unittest.TestCase):
         self.assertIn('id="insert-anomaly-button"', html)
         self.assertIn('id="auto-machine-anomaly"', html)
         self.assertIn('id="anomaly-type-select"', html)
-        self.assertIn("短故障（1–5，默认 3）", html)
-        self.assertIn("中等故障（5–15，默认 10）", html)
-        self.assertIn("长故障（15–45，默认 30）", html)
+        self.assertIn("短故障（5–15，默认 10）", html)
+        self.assertIn("中等故障（15–25，默认 20）", html)
+        self.assertIn("长故障（25–35，默认 30）", html)
         self.assertIn("降额运行（10–20，默认 15）", html)
         self.assertIn('id="anomaly-duration-hint"', html)
         self.assertIn('id="anomaly-duration"', html)
@@ -259,6 +396,28 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("OrderCancelEvent", javascript)
         self.assertIn("MachineAnomalyEvent", javascript)
         self.assertIn("MachineRecoveryEvent", javascript)
+        self.assertIn("function handleMaterialAnomalyEvent", javascript)
+        self.assertIn("function refreshMaterialAnomalyLanes", javascript)
+        self.assertIn("material-alert-badge", javascript)
+        self.assertIn("machine-alert-badge", javascript)
+        self.assertIn('short_failure: "短故障"', javascript)
+        self.assertIn("function refreshProcessTabAlerts", javascript)
+        self.assertIn("process-alert-pill material-alert-pill", javascript)
+        self.assertIn("process-alert-pill machine-alert-pill", javascript)
+        self.assertIn(
+            ".machine-lane.has-active-material-anomaly .machine-lane-track",
+            stylesheet,
+        )
+        self.assertIn(
+            ".machine-lane.has-active-machine-anomaly .machine-lane-track",
+            stylesheet,
+        )
+        self.assertIn(".process-tab.material-alert", stylesheet)
+        self.assertIn(".process-tab.machine-alert", stylesheet)
+        self.assertIn(
+            ".process-tab.material-alert.machine-alert",
+            stylesheet,
+        )
         self.assertIn(
             "option.textContent = `M${machine.local_id ?? machine.id}`",
             javascript,
@@ -309,6 +468,7 @@ class WebAppTest(unittest.TestCase):
             "--board-scale: 1;",
             stylesheet,
         )
+        self.assertIn(".metrics {\n  display: grid;", stylesheet)
         self.assertIn(
             "height: calc(190px * var(--board-scale));",
             stylesheet,
@@ -319,18 +479,18 @@ class WebAppTest(unittest.TestCase):
         )
         self.assertIn(
             ".process-navigation-row .process-tab {\n"
-            "  padding: 8px 14px;\n"
-            "  font-size: 14px;\n"
+            "  padding: 6px 11px;\n"
+            "  font-size: 12px;\n"
             "}",
             stylesheet,
         )
         self.assertIn(
             ".view-tab {\n"
-            "  padding: 9px 14px;\n"
+            "  padding: 4px 9px;\n"
             "  border-color: transparent;\n"
             "  background: transparent;\n"
             "  color: var(--muted);\n"
-            "  font-size: 17px;\n"
+            "  font-size: 12px;\n"
             "  font-weight: 700;\n"
             "}",
             stylesheet,
@@ -346,6 +506,19 @@ class WebAppTest(unittest.TestCase):
         )
         self.assertIn("renderActiveProcessSchedule", javascript)
         self.assertIn("process_id=${app.detectionProcessId || 1}", javascript)
+        self.assertIn(
+            "`/api/detection/meta?process_id=${Number(processId)}`",
+            javascript,
+        )
+        self.assertIn(
+            "&process_id=${app.detectionProcessId || 1}",
+            javascript,
+        )
+        self.assertIn("detection_available === false", javascript)
+        self.assertIn(
+            'if (status !== "running") {\n    pauseDetectionPolling();',
+            javascript,
+        )
         self.assertIn(
             "process_id: Number(app.activeProcessId)",
             javascript,
@@ -603,6 +776,74 @@ class WebAppTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             manager.reoptimize(num_samples=1, seed=0)
+        with self.assertRaises(ValueError):
+            manager.greedy_reoptimize(process_id=1)
+
+    def test_greedy_reoptimization_rebuilds_with_fastest_machine(self):
+        simulator = Simulator(realtime=False)
+        simulator.log_tag = False
+        simulator.init()
+        target = next(
+            task
+            for job in simulator.jobs
+            for task in job.tasks
+            if (
+                task.status in {"pending", "scheduled"}
+                and len(task.eligible_machines) > 1
+            )
+        )
+        fastest = min(
+            target.eligible_machines,
+            key=lambda machine_id: (
+                target.processing_times[machine_id],
+                machine_id,
+            ),
+        )
+        previous_machine = next(
+            machine_id
+            for machine_id in reversed(target.eligible_machines)
+            if machine_id != fastest
+        )
+        target.assigned_machine = previous_machine
+
+        manager = SimulationManager(
+            config_path=DEFAULT_CONFIG_PATH,
+            speed=5,
+            realtime=False,
+        )
+        manager.simulator = simulator
+        manager.selected_source = manager.datasets_by_id[
+            manager.default_dataset_id
+        ]
+        manager.state.prepare(5)
+        manager.state.selected_dataset = {
+            "id": manager.default_dataset_id,
+        }
+        manager.state.set_running(simulator)
+        lifecycle = []
+        simulator.pause = lambda: lifecycle.append("pause")
+        simulator.resume = lambda: lifecycle.append("resume")
+
+        result = manager.greedy_reoptimize(process_id=1)
+        command_result = manager.reoptimize_command("Greedy", {})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["optimizer"], "greedy")
+        self.assertEqual(
+            result["algorithm"],
+            "fastest_available_machine",
+        )
+        self.assertTrue(result["applied"])
+        self.assertIn("moved_operations", result)
+        self.assertEqual(
+            target.assigned_machine,
+            fastest,
+        )
+        self.assertEqual(command_result["optimizer"], "greedy")
+        self.assertEqual(
+            lifecycle,
+            ["pause", "resume", "pause", "resume"],
+        )
 
     def test_operation_event_contains_animation_data(self):
         simulator = SimpleNamespace(
@@ -935,6 +1176,279 @@ class WebAppTest(unittest.TestCase):
             )
         )
 
+    def test_hls_model_test_runs_without_active_simulation(self):
+        requests = []
+
+        class FakeHlsScheduler:
+            def predict(self, request):
+                requests.append(request)
+                return {
+                    "success": True,
+                    "objectives": {"makespan": 222},
+                    "schedule": [],
+                }
+
+        manager = SimulationManager(
+            config_path=DEFAULT_CONFIG_PATH,
+            speed=5,
+            realtime=False,
+            hls_scheduler_factory=FakeHlsScheduler,
+        )
+
+        result = manager.test_hls_model(
+            dataset_id=manager.default_dataset_id,
+            seed=9,
+            total_time_seconds=1,
+            search_mode=0.4,
+            random_strategy=0.7,
+            max_repeat_count=100,
+            max_iter_count=12,
+            population_size=8,
+            tabu_length=5,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["test_type"], "hls")
+        self.assertEqual(result["result"]["objectives"]["makespan"], 222)
+        self.assertEqual(requests[0]["seed"], 9)
+        self.assertEqual(requests[0]["total_time_seconds"], 1)
+        self.assertEqual(requests[0]["search_mode"], 0.4)
+        self.assertEqual(requests[0]["random_strategy"], 0.7)
+        self.assertEqual(requests[0]["max_repeat_count"], 100)
+        self.assertEqual(requests[0]["max_iter_count"], 12)
+        self.assertEqual(requests[0]["population_size"], 8)
+        self.assertEqual(requests[0]["tabu_length"], 5)
+        self.assertTrue(requests[0]["raw_lines"].startswith("15\t8\t5"))
+        self.assertIsNone(manager.simulator)
+
+    def test_hls_model_test_http_endpoint(self):
+        calls = []
+
+        class FakeManager:
+            state = SimpleNamespace()
+
+            def test_hls_model(self, **kwargs):
+                calls.append(kwargs)
+                return {
+                    "success": True,
+                    "test_type": "hls",
+                    "result": {"objectives": {"makespan": 123}},
+                }
+
+        server, thread = create_dashboard_server(
+            "127.0.0.1",
+            0,
+            FakeManager(),
+        )
+        try:
+            request = urllib.request.Request(
+                (
+                    "http://127.0.0.1:"
+                    f"{server.server_address[1]}/api/model-test/hls"
+                ),
+                data=json.dumps(
+                    {
+                        "dataset_id": "demo",
+                        "seed": 7,
+                        "total_time_seconds": 2,
+                        "search_mode": 0.4,
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["result"]["objectives"]["makespan"], 123)
+        self.assertEqual(
+            calls,
+            [{
+                "dataset_id": "demo",
+                "seed": 7,
+                "total_time_seconds": 2,
+                "search_mode": 0.4,
+            }],
+        )
+
+    def test_anomaly_model_test_does_not_inject_events(self):
+        calls = []
+
+        class FakeDetectionData:
+            def predict(self, t, machine_count=None):
+                calls.append((t, machine_count))
+                return {
+                    "t": t,
+                    "machine_count": machine_count,
+                    "predictions": [],
+                }
+
+        manager = SimulationManager(
+            config_path=DEFAULT_CONFIG_PATH,
+            speed=5,
+            realtime=False,
+        )
+        manager.detection_data_by_process[2] = FakeDetectionData()
+
+        result = manager.test_anomaly_model(
+            process_id=2,
+            t=85,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["test_type"], "anomaly")
+        self.assertEqual(result["process_id"], 2)
+        self.assertEqual(result["machine_count"], 6)
+        self.assertEqual(calls, [(85, 6)])
+        self.assertIsNone(manager.simulator)
+
+    def test_detailed_anomaly_model_test_returns_visualization_bundle(self):
+        calls = []
+
+        class FakeDetailedDetectionData:
+            protocol = "legacy"
+
+            def meta(self):
+                return {
+                    "contract": {
+                        "window_size": 100,
+                        "step": 2,
+                        "prediction_horizon": 20,
+                        "time_step": 20,
+                        "features": ["TP2", "TP3"],
+                        "model_input_shape": [1, 2, 100],
+                    },
+                    "ml": {"threshold": 0.93},
+                }
+
+            def machines(self):
+                return {
+                    "machines": [
+                        {"machine_id": 0, "T": 100},
+                        {"machine_id": 1, "T": 110},
+                    ],
+                }
+
+            def predict_one(self, machine_id, t):
+                calls.append(("predict", machine_id, t))
+                return {
+                    "machine_id": machine_id,
+                    "t": t,
+                    "t_effective": t,
+                    "prediction_horizon": 20,
+                    "probability": 0.96,
+                    "threshold": 0.93,
+                    "is_alarm": True,
+                    "model": {
+                        "loaded": True,
+                        "device": "cpu",
+                        "error": None,
+                    },
+                }
+
+            def window(self, machine_id, t):
+                calls.append(("window", machine_id, t))
+                return {
+                    "T": 100,
+                    "window": {
+                        "features": ["TP2", "TP3"],
+                        "data": [[1, 2] for _ in range(100)],
+                    },
+                }
+
+            def truth(self, machine_id, t):
+                calls.append(("truth", machine_id, t))
+                return {
+                    "label": 0,
+                    "warn": 1,
+                    "next_anomaly_t": 87,
+                }
+
+            def stream(self, machine_id, from_t, count):
+                calls.append(("stream", machine_id, from_t, count))
+                return {
+                    "frames": [
+                        {
+                            "t": from_t + index,
+                            "label": int(index >= 2),
+                            "warn": 1,
+                        }
+                        for index in range(count)
+                    ],
+                }
+
+            def events(self, machine_id):
+                calls.append(("events", machine_id))
+                return {
+                    "count": 1,
+                    "events": [{"start": 87, "end": 98, "duration": 12}],
+                }
+
+        manager = SimulationManager(
+            config_path=DEFAULT_CONFIG_PATH,
+            speed=5,
+            realtime=False,
+        )
+        fake_detection = FakeDetailedDetectionData()
+        manager.detection_data = fake_detection
+        manager.detection_data_by_process[1] = fake_detection
+
+        payload = manager.test_anomaly_model(
+            process_id=1,
+            t=85,
+            machine_id=0,
+        )
+        result = payload["result"]
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["machine_id"], 0)
+        self.assertEqual(result["model"]["name"], "MetroPT CNN-LSTM")
+        self.assertEqual(result["window"]["window"]["data"][0], [1, 2])
+        self.assertEqual(result["summary"]["probability"], 0.96)
+        self.assertEqual(result["summary"]["future_fault_count"], 18)
+        self.assertEqual(result["summary"]["next_event_delta"], 2)
+        self.assertEqual(result["events"]["count"], 1)
+        self.assertEqual(
+            calls,
+            [
+                ("predict", 0, 85),
+                ("window", 0, 85),
+                ("truth", 0, 85),
+                ("stream", 0, 85, 20),
+                ("events", 0),
+            ],
+        )
+        self.assertIsNone(manager.simulator)
+
+    def test_detection_sources_are_configured_per_process(self):
+        manager = SimulationManager(
+            config_path=DEFAULT_CONFIG_PATH,
+            speed=5,
+            realtime=False,
+        )
+
+        self.assertEqual(
+            manager.detection_data_for_process(1).base_url,
+            "http://127.0.0.1:8068",
+        )
+        self.assertEqual(
+            manager.detection_data_for_process(2).base_url,
+            "http://127.0.0.1:8078",
+        )
+        self.assertEqual(
+            manager.detection_data_for_process(2).protocol,
+            "mfddt",
+        )
+        with self.assertRaises(ValueError):
+            manager.detection_data_for_process(3)
+        with self.assertRaises(ValueError):
+            manager.detection_data_for_process(4)
+
     def test_hls_reoptimization_http_endpoint(self):
         calls = []
 
@@ -945,6 +1459,7 @@ class WebAppTest(unittest.TestCase):
                 self,
                 seed=0,
                 process_id=1,
+                wait_for_animation=False,
                 **options,
             ):
                 calls.append(
@@ -997,6 +1512,45 @@ class WebAppTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_greedy_reoptimization_http_endpoint(self):
+        calls = []
+
+        class FakeManager:
+            state = SimpleNamespace()
+
+            def greedy_reoptimize(
+                self,
+                process_id=1,
+                wait_for_animation=False,
+            ):
+                calls.append(process_id)
+                return {"success": True, "optimizer": "greedy"}
+
+        server, thread = create_dashboard_server(
+            "127.0.0.1",
+            0,
+            FakeManager(),
+        )
+        try:
+            request = urllib.request.Request(
+                (
+                    "http://127.0.0.1:"
+                    f"{server.server_address[1]}/api/greedy-reoptimize"
+                ),
+                data=json.dumps({"process_id": 3}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(payload["optimizer"], "greedy")
+        self.assertEqual(calls, [3])
 
     def test_reoptimization_command_http_endpoint(self):
         calls = []
@@ -1078,6 +1632,8 @@ class WebAppTest(unittest.TestCase):
             manager.reoptimize_command("DRL", {"unsupported": 1})
         with self.assertRaises(ValueError):
             manager.reoptimize_command("HLS", ["invalid"])
+        with self.assertRaises(ValueError):
+            manager.reoptimize_command("Greedy", {"unsupported": 1})
 
     def test_submit_random_job_http_endpoint(self):
         calls = []
@@ -1171,9 +1727,9 @@ class WebAppTest(unittest.TestCase):
         calls = []
         auto_state = {
             "enabled": True,
-            "interval": 40,
+            "interval": 50,
             "count": 0,
-            "next_time": 40,
+            "next_time": 50,
             "last": None,
         }
 

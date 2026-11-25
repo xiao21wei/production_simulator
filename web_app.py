@@ -17,6 +17,12 @@ from simulator.anomaly import (
     MACHINE_ANOMALY_DEFAULT_DURATIONS,
     MACHINE_ANOMALY_DURATION_RANGES,
     MachineAnomalyType,
+    validate_machine_anomaly_duration,
+)
+from simulator.construction import (
+    CONSTRUCTION_METHODS,
+    ConstructionError,
+    construct_schedule as run_construction,
 )
 from simulator.detection_data import MachineDetectionDataProvider
 from simulator.dataset import (
@@ -35,8 +41,9 @@ from simulator.simulator import Simulator
 PROJECT_ROOT = Path(__file__).resolve().parent
 WEB_ROOT = PROJECT_ROOT / "web"
 HLS_TEST_ROOT = PROJECT_ROOT / "HLS_test"
-AUTO_MACHINE_ANOMALY_INTERVAL = 40
+AUTO_MACHINE_ANOMALY_INTERVAL = 50
 MACHINE_ANOMALY_DRL_NUM_SAMPLES = 1
+REOPTIMIZATION_ANIMATION_TIMEOUT = 15.0
 HLS_OPTION_FIELDS = (
     "total_time_seconds",
     "search_mode",
@@ -47,13 +54,22 @@ HLS_OPTION_FIELDS = (
     "tabu_length",
 )
 REOPTIMIZATION_COMMAND_ALIASES = {
+    "greedy": "greedy",
+    "fastest": "greedy",
+    "builtin": "greedy",
     "drl": "drl",
     "mofjsp": "drl",
     "hls": "hls",
+    "influence_aware": "construction",
+    "influenceaware": "construction",
+    "influenceawareconstruct": "construction",
+    "construction": "construction",
 }
 REOPTIMIZATION_COMMAND_CONFIG_FIELDS = {
+    "greedy": set(),
     "drl": {"num_samples", "seed"},
     "hls": {"seed", *HLS_OPTION_FIELDS},
+    "construction": {"method"},
 }
 EVENT_FIELDS = (
     "job_id",
@@ -302,6 +318,7 @@ class DashboardState:
         self.processes = []
         self.process_plans = {}
         self.process_machine_states = {}
+        self.detection_process_ids = set()
         self.material_catalog = {}
         self.objectives = {}
         self.selected_dataset = None
@@ -535,6 +552,14 @@ class DashboardState:
                 self.processes.append(
                     {
                         **process,
+                        "detection_available": (
+                            int(process["id"])
+                            in getattr(
+                                self,
+                                "detection_process_ids",
+                                set(),
+                            )
+                        ),
                         "active_job_count": process_job_count,
                     }
                 )
@@ -565,6 +590,7 @@ class SimulationManager:
         realtime=None,
         scheduler_factory=None,
         hls_scheduler_factory=None,
+        influence_aware_executable=None,
         anomaly_handling_enabled=None,
         log_dir=None,
     ):
@@ -595,8 +621,12 @@ class SimulationManager:
         self.scheduler_lock = threading.Lock()
         self.scheduler_factory = scheduler_factory
         self.hls_scheduler_factory = hls_scheduler_factory
+        self.influence_aware_executable = influence_aware_executable
         self._scheduler = None
         self._hls_scheduler = None
+        self.pending_reoptimization_animation = None
+        self.reoptimization_animation_timer = None
+        self.reoptimization_animation_sequence = 0
         self.auto_job_submission_enabled = False
         self.auto_job_submission_triggered = False
         self.auto_job_submission_count = 0
@@ -607,24 +637,50 @@ class SimulationManager:
         self._prediction_alarm_generation = None
         self._prediction_alarm_timestamps = set()
         detection_config = config.get("detection_data", {})
-        self.detection_data = MachineDetectionDataProvider(
-            base_url=detection_config.get(
-                "base_url",
-                "http://192.168.1.68:8068",
-            ),
-            timeout=detection_config.get("timeout", 10),
-            history_points=detection_config.get(
+        detection_provider_options = {
+            "timeout": detection_config.get("timeout", 10),
+            "history_points": detection_config.get(
                 "history_points",
                 60,
             ),
-            poll_interval_ms=detection_config.get(
+            "poll_interval_ms": detection_config.get(
                 "poll_interval_ms",
                 1000,
             ),
-            prediction_interval=detection_config.get(
+            "prediction_interval": detection_config.get(
                 "prediction_interval",
                 5,
             ),
+        }
+        process_base_urls = detection_config.get(
+            "process_base_urls",
+        ) or {
+            1: detection_config.get(
+                "base_url",
+                "http://127.0.0.1:8068",
+            )
+        }
+        process_protocols = detection_config.get(
+            "process_protocols",
+            {},
+        )
+        self.detection_data_by_process = {
+            int(process_id): MachineDetectionDataProvider(
+                base_url=base_url,
+                protocol=process_protocols.get(
+                    str(process_id),
+                    "legacy",
+                ),
+                **detection_provider_options,
+            )
+            for process_id, base_url in process_base_urls.items()
+        }
+        self.detection_process_ids = set(
+            self.detection_data_by_process
+        )
+        self.detection_data = self.detection_data_by_process.get(1)
+        self.state.detection_process_ids = set(
+            self.detection_process_ids
         )
         self.run_logger = None
         self.dataset_root = (
@@ -665,6 +721,10 @@ class SimulationManager:
         with self.start_lock:
             if self.thread is not None and self.thread.is_alive():
                 return False
+            if self.reoptimization_animation_timer is not None:
+                self.reoptimization_animation_timer.cancel()
+            self.reoptimization_animation_timer = None
+            self.pending_reoptimization_animation = None
             dataset_id = dataset_id or self.default_dataset_id
             source = self.datasets_by_id.get(dataset_id)
             if source is None:
@@ -705,6 +765,21 @@ class SimulationManager:
             or self.simulator.curr_time,
         )
 
+    def detection_data_for_process(self, process_id=1):
+        try:
+            process_id = int(process_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("process_id must be an integer.") from exc
+        if process_id == 1 and self.detection_data is not None:
+            return self.detection_data
+        provider = self.detection_data_by_process.get(process_id)
+        if provider is None:
+            raise ValueError(
+                "Detection data source is not configured for "
+                f"process_id={process_id}."
+            )
+        return provider
+
     def _dispatch_current_event(self, event):
         handled = self.simulator.dispatchEventImmediately(event)
         if handled is False:
@@ -712,6 +787,132 @@ class SimulationManager:
                 f"Event {type(event).__name__} was rejected."
             )
         return event
+
+    def _defer_resume_for_reoptimization_animation(
+        self,
+        reoptimization,
+        wait_for_animation,
+    ):
+        """Keep the simulator paused until the queue movement finishes."""
+        moved_operations = list(
+            reoptimization.get("moved_operations", [])
+        )
+        if not wait_for_animation or not moved_operations:
+            with self.state.lock:
+                self.state.status = "running"
+                self.state._update_simulator(self.simulator)
+            self.simulator.resume()
+            return {
+                "animation_required": False,
+                "animation_id": None,
+                "animation_moves": [],
+            }
+
+        self.reoptimization_animation_sequence += 1
+        animation_id = self.reoptimization_animation_sequence
+        animation_moves = [
+            {
+                "task_id": operation.get("task_id"),
+                "job_id": operation.get("job_id"),
+                "operation_id": operation.get("operation_id"),
+                "from_machine_id": operation.get("old_machine_id"),
+                "from_queue_machine_id": operation.get(
+                    "from_queue_machine_id",
+                    operation.get("old_machine_id"),
+                ),
+                "from_queue_index": operation.get(
+                    "from_queue_index",
+                    0,
+                ),
+                "current_position_machine_id": operation.get(
+                    "current_position_machine_id"
+                ),
+                "to_machine_id": operation.get("new_machine_id"),
+                "to_queue_machine_id": operation.get(
+                    "to_queue_machine_id",
+                    operation.get("new_machine_id"),
+                ),
+                "to_queue_index": operation.get(
+                    "to_queue_index",
+                    0,
+                ),
+                "start_time": operation.get("start_time"),
+                "transport_time": operation.get(
+                    "transport_time",
+                    0,
+                ),
+                "waiting_time": operation.get("waiting_time", 0),
+            }
+            for operation in moved_operations
+        ]
+        self.pending_reoptimization_animation = {
+            "animation_id": animation_id,
+            "moves": animation_moves,
+        }
+        with self.state.lock:
+            self.state.status = "animating"
+            self.state._update_simulator(self.simulator)
+
+        timer = threading.Timer(
+            REOPTIMIZATION_ANIMATION_TIMEOUT,
+            self.complete_reoptimization_animation,
+            args=(animation_id,),
+        )
+        timer.daemon = True
+        self.reoptimization_animation_timer = timer
+        timer.start()
+        return {
+            "animation_required": True,
+            "animation_id": animation_id,
+            "animation_moves": animation_moves,
+            "animation_timeout_seconds": (
+                REOPTIMIZATION_ANIMATION_TIMEOUT
+            ),
+        }
+
+    def complete_reoptimization_animation(self, animation_id=None):
+        """Resume simulation after the frontend finishes queue animation."""
+        with self.mutation_lock:
+            pending = self.pending_reoptimization_animation
+            if pending is None:
+                return {
+                    "success": False,
+                    "error": "No reoptimization animation is pending.",
+                }
+            if (
+                animation_id is not None
+                and int(animation_id) != int(pending["animation_id"])
+            ):
+                return {
+                    "success": False,
+                    "error": "Unknown reoptimization animation ID.",
+                }
+
+            if self.reoptimization_animation_timer is not None:
+                self.reoptimization_animation_timer.cancel()
+            self.reoptimization_animation_timer = None
+            self.pending_reoptimization_animation = None
+            with self.state.lock:
+                if (
+                    self.state.status != "animating"
+                    or self.simulator.stop_event.is_set()
+                ):
+                    return {
+                        "success": False,
+                        "error": (
+                            "Simulation is no longer waiting for the "
+                            "reoptimization animation."
+                        ),
+                    }
+                self.simulator.resume()
+                self.state.status = "running"
+                self.state._update_simulator(self.simulator)
+            return {
+                "success": True,
+                "animation_id": pending["animation_id"],
+                "resumed": True,
+                "status": "running",
+            }
 
     def set_paused(self, paused):
         if not isinstance(paused, bool):
@@ -767,10 +968,15 @@ class SimulationManager:
                 "running",
                 "paused",
                 "reoptimizing",
+                "animating",
             }:
                 raise ValueError(
                     "Simulation must be active to stop."
                 )
+            if self.reoptimization_animation_timer is not None:
+                self.reoptimization_animation_timer.cancel()
+            self.reoptimization_animation_timer = None
+            self.pending_reoptimization_animation = None
             self.state.status = "stopping"
             self.simulator.stop()
 
@@ -963,7 +1169,98 @@ class SimulationManager:
         )
         return model_result, assignments
 
-    def reoptimize(self, num_samples=1, seed=0, process_id=1):
+    def construct_schedule(
+        self,
+        dataset_id=None,
+        method="InfluenceAwareConstruct",
+        process_id=1,
+    ):
+        """Run one initial construction method without changing simulation."""
+        source = (
+            self.datasets_by_id.get(dataset_id)
+            if dataset_id
+            else self.selected_source
+        )
+        if dataset_id and source is None:
+            raise ValueError(f"Unknown dataset ID: {dataset_id}")
+        if source is None:
+            source = self.datasets_by_id[self.default_dataset_id]
+
+        try:
+            process_id = int(process_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("process_id must be an integer.") from exc
+        process = next(
+            (
+                item
+                for item in source.get("processes", [])
+                if int(item["id"]) == process_id
+            ),
+            None,
+        )
+        if process is None:
+            if process_id != 1:
+                raise ValueError(f"Unknown process_id: {process_id}")
+            process = source
+
+        with self.scheduler_lock:
+            result = run_construction(
+                raw_file=process["raw_file"],
+                additional_file=process["additional_file"],
+                delivery_cost_file=process.get(
+                    "delivery_cost_file"
+                ),
+                dataset_root=self.dataset_root,
+                process_id=process_id,
+                method=method,
+                executable=self.influence_aware_executable,
+            )
+        return {
+            **result,
+            "dataset_id": source["id"],
+            "process_id": process_id,
+            "api": {
+                "method": result.get("method"),
+                "dataset_id": source["id"],
+                "process_id": process_id,
+            },
+        }
+
+    def construction_methods(self):
+        """Return the construction methods exposed by the simulator API."""
+        return {
+            "default_method": "InfluenceAwareConstruct",
+            "methods": list(CONSTRUCTION_METHODS),
+        }
+
+    def test_construction_model(
+        self,
+        dataset_id=None,
+        method="InfluenceAwareConstruct",
+        process_id=1,
+    ):
+        """Run one construction method without changing the active schedule."""
+        result = self.construct_schedule(
+            dataset_id=dataset_id,
+            method=method,
+            process_id=process_id,
+        )
+        return {
+            "success": True,
+            "test_type": "construction",
+            "dataset_id": result["dataset_id"],
+            "process_id": result["process_id"],
+            "method": result["method"],
+            "result": result,
+        }
+
+    def reoptimize(
+        self,
+        num_samples=1,
+        seed=0,
+        process_id=1,
+        wait_for_animation=False,
+    ):
         """Use the mofjsp model to reassign all unfinished operations."""
         with self.mutation_lock:
             with self.state.lock:
@@ -999,11 +1296,11 @@ class SimulationManager:
                         self.simulator.planned_operations
                     )
                     self.state.plan_revision += 1
-                    self.state.status = "running"
                     self.state._update_simulator(self.simulator)
             except Exception as exc:
                 with self.state.lock:
                     self.state.status = "running"
+                self.simulator.resume()
                 if self.run_logger is not None:
                     self.run_logger.record_reoptimization(
                         {
@@ -1019,9 +1316,13 @@ class SimulationManager:
                         self.simulator,
                     )
                 raise
-            finally:
-                self.simulator.resume()
 
+            animation_state = (
+                self._defer_resume_for_reoptimization_animation(
+                    reoptimization,
+                    wait_for_animation,
+                )
+            )
             response = {
                 "success": True,
                 "model": model_result.get("model"),
@@ -1029,6 +1330,7 @@ class SimulationManager:
                 "model_objectives": model_result.get("objectives"),
                 "process_ids": [int(process_id)],
                 **reoptimization,
+                **animation_state,
             }
             if self.run_logger is not None:
                 self.run_logger.record_reoptimization(
@@ -1042,7 +1344,13 @@ class SimulationManager:
                 )
             return response
 
-    def hls_reoptimize(self, seed=0, process_id=1, **hls_options):
+    def hls_reoptimize(
+        self,
+        seed=0,
+        process_id=1,
+        wait_for_animation=False,
+        **hls_options,
+    ):
         """
         Use HLS to optimize makespan and apply only its machine assignments.
 
@@ -1145,11 +1453,11 @@ class SimulationManager:
                         self.simulator.planned_operations
                     )
                     self.state.plan_revision += 1
-                    self.state.status = "running"
                     self.state._update_simulator(self.simulator)
             except Exception as exc:
                 with self.state.lock:
                     self.state.status = "running"
+                self.simulator.resume()
                 if self.run_logger is not None:
                     self.run_logger.record_reoptimization(
                         {
@@ -1166,9 +1474,13 @@ class SimulationManager:
                         self.simulator,
                     )
                 raise
-            finally:
-                self.simulator.resume()
 
+            animation_state = (
+                self._defer_resume_for_reoptimization_animation(
+                    reoptimization,
+                    wait_for_animation,
+                )
+            )
             response = {
                 "success": True,
                 "optimizer": "hls",
@@ -1186,6 +1498,7 @@ class SimulationManager:
                     False,
                 ),
                 **reoptimization,
+                **animation_state,
             }
             if self.run_logger is not None:
                 self.run_logger.record_reoptimization(
@@ -1200,13 +1513,553 @@ class SimulationManager:
                 )
             return response
 
+    def construction_reoptimize(
+        self,
+        method="InfluenceAwareConstruct",
+        process_id=1,
+        wait_for_animation=False,
+    ):
+        """Apply construction-method machine assignments to unfinished work."""
+        with self.mutation_lock:
+            with self.state.lock:
+                if self.simulator is None:
+                    raise ValueError("Simulation has not been started.")
+                if self.state.status != "running":
+                    raise ValueError(
+                        "Simulation must be running to reoptimize."
+                    )
+                process_id = int(process_id)
+                source = self.selected_source
+                if source is None:
+                    raise ValueError("No dataset has been selected.")
+                process_source = next(
+                    (
+                        item
+                        for item in source.get("processes", [])
+                        if int(item["id"]) == process_id
+                    ),
+                    None,
+                )
+                if process_source is None:
+                    if process_id != 1:
+                        raise ValueError(
+                            f"Unknown process_id: {process_id}"
+                        )
+                    process_source = source
+                self.state.status = "reoptimizing"
+
+            self.simulator.pause()
+            try:
+                model_result = self.construct_schedule(
+                    dataset_id=source["id"],
+                    process_id=process_id,
+                    method=method,
+                )
+                schedule_operations = (
+                    model_result.get("schedule", {}).get(
+                        "operations",
+                        [],
+                    )
+                )
+                unfinished_key_map = {
+                    (
+                        job.job_id,
+                        task.stage_operation_id,
+                    ): task.operation_id
+                    for job in self.simulator.jobs
+                    for task in job.tasks
+                    if (
+                        task.status in {"pending", "scheduled"}
+                        and task.stage_id == process_id
+                    )
+                }
+                assignments = {}
+                for row in schedule_operations:
+                    stage_key = (
+                        int(row["job_id"]),
+                        int(row["operation_id"]),
+                    )
+                    operation_id = unfinished_key_map.get(stage_key)
+                    if operation_id is None:
+                        continue
+                    assignments[(stage_key[0], operation_id)] = (
+                        int(row["machine_id"])
+                        + int(process_source.get("machine_offset", 0))
+                    )
+                assignments = self._completeUnfinishedAssignments(
+                    assignments,
+                    stage_ids={process_id},
+                )
+                reoptimization = (
+                    self.simulator.reoptimizeUnfinishedOperations(
+                        assignments,
+                        current_time=self._current_event_timestamp(),
+                        stage_ids={process_id},
+                    )
+                )
+                with self.state.lock:
+                    self.state.plan = serialize_plan(
+                        self.simulator.planned_operations
+                    )
+                    self.state.plan_revision += 1
+                    self.state._update_simulator(self.simulator)
+            except Exception as exc:
+                with self.state.lock:
+                    self.state.status = "running"
+                self.simulator.resume()
+                if self.run_logger is not None:
+                    self.run_logger.record_reoptimization(
+                        {
+                            "optimizer": "construction",
+                            "method": str(method),
+                            "process_id": process_id,
+                            "simulation_time": self.simulator.curr_time,
+                        },
+                        {
+                            "success": False,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        },
+                        self.simulator,
+                    )
+                raise
+
+            animation_state = (
+                self._defer_resume_for_reoptimization_animation(
+                    reoptimization,
+                    wait_for_animation,
+                )
+            )
+            response = {
+                "success": True,
+                "optimizer": "construction",
+                "construction_method": model_result.get(
+                    "method",
+                    method,
+                ),
+                "construction_objectives": model_result.get(
+                    "objectives",
+                    {},
+                ),
+                "construction_objective_breakdown": (
+                    model_result.get("objective_breakdown", {})
+                ),
+                "construction_schedule_times_used": False,
+                "transport_time_recalculated": True,
+                "assignment_scope": (
+                    "pending_and_scheduled_operations"
+                ),
+                "process_ids": [process_id],
+                "construction_assignment_count": len(assignments),
+                **reoptimization,
+                **animation_state,
+            }
+            if self.run_logger is not None:
+                self.run_logger.record_reoptimization(
+                    {
+                        "optimizer": "construction",
+                        "method": response["construction_method"],
+                        "process_id": process_id,
+                        "simulation_time": self.simulator.curr_time,
+                    },
+                    response,
+                    self.simulator,
+                )
+            return response
+
+    def greedy_reoptimize(
+        self,
+        process_id=1,
+        wait_for_animation=False,
+    ):
+        """Use the built-in fastest-available-machine heuristic."""
+        with self.mutation_lock:
+            with self.state.lock:
+                if self.simulator is None:
+                    raise ValueError("Simulation has not been started.")
+                if self.state.status != "running":
+                    raise ValueError(
+                        "Simulation must be running to reoptimize."
+                    )
+                process_id = int(process_id)
+                self.state.status = "reoptimizing"
+
+            self.simulator.pause()
+            try:
+                now = max(
+                    self.simulator.curr_time,
+                    self.simulator.clock.current_simulation_time,
+                    self.simulator.pending_event_timestamp
+                    or self.simulator.curr_time,
+                )
+                reoptimization = (
+                    self.simulator._greedyRescheduleUnfinished(
+                        now,
+                        stage_ids={process_id},
+                    )
+                )
+                with self.state.lock:
+                    self.state.plan = serialize_plan(
+                        self.simulator.planned_operations
+                    )
+                    self.state.plan_revision += 1
+                    self.state._update_simulator(self.simulator)
+            except Exception as exc:
+                with self.state.lock:
+                    self.state.status = "running"
+                self.simulator.resume()
+                if self.run_logger is not None:
+                    self.run_logger.record_reoptimization(
+                        {
+                            "optimizer": "greedy",
+                            "process_id": process_id,
+                            "simulation_time": self.simulator.curr_time,
+                        },
+                        {
+                            "success": False,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        },
+                        self.simulator,
+                    )
+                raise
+
+            animation_state = (
+                self._defer_resume_for_reoptimization_animation(
+                    reoptimization,
+                    wait_for_animation,
+                )
+            )
+            response = {
+                "success": True,
+                "optimizer": "greedy",
+                "algorithm": "fastest_available_machine",
+                "assignment_scope": "pending_and_scheduled_operations",
+                "transport_time_recalculated": True,
+                "process_ids": [process_id],
+                **reoptimization,
+                **animation_state,
+            }
+            if self.run_logger is not None:
+                self.run_logger.record_reoptimization(
+                    {
+                        "optimizer": "greedy",
+                        "process_id": process_id,
+                        "simulation_time": self.simulator.curr_time,
+                    },
+                    response,
+                    self.simulator,
+                )
+            return response
+
+    def test_hls_model(
+        self,
+        dataset_id=None,
+        seed=0,
+        **hls_options,
+    ):
+        """Run HLS model inference without changing the active schedule."""
+        source = (
+            self.datasets_by_id.get(dataset_id)
+            if dataset_id
+            else self.selected_source
+        )
+        if source is None:
+            source = self.datasets_by_id[self.default_dataset_id]
+        request = {
+            "raw_lines": Path(source["raw_file"]).read_text(
+                encoding="utf-8"
+            ),
+            "additional_lines": load_model_additional_text(
+                source["raw_file"],
+                source["additional_file"],
+                source.get("delivery_cost_file"),
+            ),
+            "instance_name": source["id"],
+            "seed": int(seed),
+        }
+        request.update(
+            {
+                key: hls_options[key]
+                for key in HLS_OPTION_FIELDS
+                if key in hls_options
+            }
+        )
+        scheduler = self._get_hls_scheduler()
+        with self.scheduler_lock:
+            model_result = scheduler.predict(request)
+        return {
+            "success": True,
+            "test_type": "hls",
+            "dataset_id": source["id"],
+            "parameters": {
+                "seed": int(seed),
+                **{
+                    key: hls_options[key]
+                    for key in HLS_OPTION_FIELDS
+                    if key in hls_options
+                },
+            },
+            "result": model_result,
+        }
+
+    def test_anomaly_model(
+        self,
+        process_id=1,
+        t=85,
+        machine_count=None,
+        machine_id=None,
+    ):
+        """Run anomaly prediction without injecting an anomaly event."""
+        source = self.selected_source or self.datasets_by_id[
+            self.default_dataset_id
+        ]
+        process_id = int(process_id)
+        process_definition = next(
+            (
+                process
+                for process in source.get("processes", [])
+                if int(process["id"]) == process_id
+            ),
+            None,
+        )
+        if process_definition is None:
+            if process_id != 1:
+                raise ValueError(f"Unknown process_id: {process_id}")
+            process_machine_count = int(
+                source.get("processes", [{}])[0].get(
+                    "machine_count",
+                    source.get("processes", [{}])[0].get(
+                        "num_machines",
+                        source.get("num_machines", 1),
+                    ),
+                )
+            )
+        else:
+            process_machine_count = int(
+                process_definition.get(
+                    "machine_count",
+                    process_definition.get("num_machines", 1),
+                )
+            )
+        count = (
+            process_machine_count
+            if machine_count is None
+            else int(machine_count)
+        )
+        if count < 1:
+            raise ValueError("machine_count must be positive.")
+        provider = self.detection_data_for_process(process_id)
+        if machine_id is not None:
+            machine_id = int(machine_id)
+            if not 0 <= machine_id < count:
+                raise ValueError(
+                    f"machine_id must be between 0 and {count - 1}."
+                )
+            if provider.protocol != "legacy":
+                raise ValueError(
+                    "Detailed model input visualisation is only available "
+                    "for the stamping MetroPT detection model."
+                )
+            return self._test_legacy_anomaly_model(
+                source,
+                provider,
+                process_id,
+                count,
+                machine_id,
+                int(t),
+            )
+        prediction = provider.predict(
+            int(t),
+            machine_count=count,
+        )
+        return {
+            "success": True,
+            "test_type": "anomaly",
+            "dataset_id": source["id"],
+            "process_id": process_id,
+            "machine_count": count,
+            "result": prediction,
+        }
+
+    def _test_legacy_anomaly_model(
+        self,
+        source,
+        provider,
+        process_id,
+        machine_count,
+        machine_id,
+        t,
+    ):
+        """Collect one complete model-test bundle for the MetroPT model."""
+        metadata = provider.meta()
+        prediction = provider.predict_one(machine_id, t)
+        horizon = int(prediction.get("prediction_horizon", 20))
+        evidence_errors = {}
+
+        def capture(name, loader):
+            try:
+                return loader()
+            except Exception as exc:
+                evidence_errors[name] = str(exc)
+                return None
+
+        window = capture(
+            "window",
+            lambda: provider.window(machine_id, t),
+        )
+        truth = capture(
+            "truth",
+            lambda: provider.truth(machine_id, t),
+        )
+        future = capture(
+            "future",
+            lambda: provider.stream(
+                machine_id,
+                from_t=t,
+                count=horizon,
+            ),
+        )
+        event_payload = capture(
+            "events",
+            lambda: provider.events(machine_id),
+        )
+
+        frames = (future or {}).get("frames", [])
+        future_frames = frames[1:] if len(frames) > 1 else frames
+        future_fault_count = sum(
+            1
+            for frame in future_frames
+            if int(frame.get("label", 0)) == 1
+        )
+        future_fault_ratio = (
+            future_fault_count / len(future_frames)
+            if future_frames
+            else 0.0
+        )
+        events = (event_payload or {}).get("events", [])
+        effective_t = int(
+            prediction.get("t_effective", t)
+        )
+        current_event = next(
+            (
+                event
+                for event in events
+                if int(event.get("start", 0)) <= effective_t
+                <= int(event.get("end", -1))
+            ),
+            None,
+        )
+        next_event = next(
+            (
+                event
+                for event in events
+                if int(event.get("start", 0)) > effective_t
+            ),
+            None,
+        )
+        threshold = float(
+            prediction.get(
+                "threshold",
+                metadata.get("ml", {}).get("threshold", 0),
+            )
+        )
+        probability = float(prediction.get("probability", 0))
+        contract = metadata.get("contract", {})
+        model_payload = prediction.get("model") or {}
+        result = {
+            **prediction,
+            "machine_count": machine_count,
+            "predictions": [prediction],
+            "input_parameters": {
+                "machine_id": machine_id,
+                "t": t,
+                "t_effective": effective_t,
+                "T": int(
+                    (window or {}).get("T", 0)
+                    or next(
+                        (
+                            item.get("T", 0)
+                            for item in provider.machines().get(
+                                "machines",
+                                [],
+                            )
+                            if int(item.get("machine_id", -1))
+                            == machine_id
+                        ),
+                        0,
+                    )
+                ),
+                "machine_count": machine_count,
+                "window_size": int(
+                    contract.get("window_size", 0) or 0
+                ),
+                "prediction_horizon": horizon,
+                "decision_threshold": threshold,
+            },
+            "model": {
+                "name": (
+                    metadata.get("ml", {}).get("model_name")
+                    or "MetroPT CNN-LSTM"
+                ),
+                "artifact": "metropt_model.pth",
+                "protocol": provider.protocol,
+                "loaded": bool(model_payload.get("loaded", False)),
+                "device": model_payload.get("device"),
+                "error": model_payload.get("error"),
+                "contract": contract,
+                "threshold": threshold,
+            },
+            "window": window,
+            "truth": truth,
+            "future": future,
+            "events": event_payload,
+            "summary": {
+                "probability": probability,
+                "threshold": threshold,
+                "threshold_margin": probability - threshold,
+                "is_alarm": bool(prediction.get("is_alarm", False)),
+                "truth_label": (
+                    int(truth.get("label", 0)) if truth else None
+                ),
+                "warn": (
+                    int(truth.get("warn", 0)) if truth else None
+                ),
+                "next_fault_t": (
+                    truth.get("next_anomaly_t") if truth else None
+                ),
+                "current_event": current_event,
+                "next_event": next_event,
+                "next_event_delta": (
+                    int(next_event["start"]) - effective_t
+                    if next_event
+                    else None
+                ),
+                "event_count": len(events),
+                "future_fault_count": future_fault_count,
+                "future_point_count": len(future_frames),
+                "future_fault_ratio": future_fault_ratio,
+            },
+            "evidence_errors": evidence_errors,
+        }
+        return {
+            "success": True,
+            "test_type": "anomaly",
+            "dataset_id": source["id"],
+            "process_id": process_id,
+            "machine_count": machine_count,
+            "machine_id": machine_id,
+            "result": result,
+        }
+
     def reoptimize_command(
         self,
         method,
         config=None,
         process_id=1,
+        wait_for_animation=False,
     ):
-        """Dispatch a DRL or HLS reoptimization command."""
+        """Dispatch a Greedy, DRL, or HLS reoptimization command."""
         normalized_method = self._normalize_reoptimization_method(method)
         if config is None:
             config = {}
@@ -1227,12 +2080,28 @@ class SimulationManager:
         if normalized_method == "hls":
             result = self.hls_reoptimize(
                 process_id=process_id,
+                wait_for_animation=wait_for_animation,
                 **normalized_config,
             )
-        else:
+        elif normalized_method == "drl":
             result = self.reoptimize(
                 process_id=process_id,
+                wait_for_animation=wait_for_animation,
                 **normalized_config,
+            )
+        elif normalized_method == "construction":
+            result = self.construction_reoptimize(
+                process_id=process_id,
+                method=normalized_config.get(
+                    "method",
+                    "InfluenceAwareConstruct",
+                ),
+                wait_for_animation=wait_for_animation,
+            )
+        else:
+            result = self.greedy_reoptimize(
+                process_id=process_id,
+                wait_for_animation=wait_for_animation,
             )
         return {
             **result,
@@ -1727,10 +2596,35 @@ class SimulationManager:
                     )
                     continue
                 handled_machine_ids.add(machine_id)
-                anomaly, duration = self._choose_prediction_anomaly(
-                    machine_id,
-                    prediction_t,
-                )
+                anomaly = None
+                duration = None
+                prediction_type = prediction.get("anomaly_type")
+                if (
+                    isinstance(prediction_type, str)
+                    and prediction_type != "normal"
+                ):
+                    try:
+                        anomaly = MachineAnomalyType.normalize(
+                            prediction_type
+                        )
+                        duration = validate_machine_anomaly_duration(
+                            anomaly,
+                            prediction.get(
+                                "recommended_duration",
+                                MACHINE_ANOMALY_DEFAULT_DURATIONS[
+                                    anomaly
+                                ],
+                            ),
+                        )
+                    except (TypeError, ValueError):
+                        duration = MACHINE_ANOMALY_DEFAULT_DURATIONS[
+                            anomaly
+                        ] if anomaly is not None else None
+                if anomaly is None:
+                    anomaly, duration = self._choose_prediction_anomaly(
+                        machine_id,
+                        prediction_t,
+                    )
                 try:
                     result = self.handle_machine_anomaly(
                         machine_id,
@@ -1859,6 +2753,26 @@ class SimulationManager:
             return None
         return max(1, self.simulator.initial_job_count // 3)
 
+    def _stamping_unfinished_job_count(self):
+        """Count non-canceled Jobs that still have unfinished stamping work."""
+        if self.simulator is None:
+            return 0
+        count = 0
+        for job in self.simulator.jobs:
+            if job.is_canceled:
+                continue
+            stamping_tasks = [
+                task
+                for task in job.tasks
+                if getattr(task, "stage_id", 1) == 1
+            ]
+            if any(
+                task.status not in {"completed", "canceled"}
+                for task in stamping_tasks
+            ):
+                count += 1
+        return count
+
     def _maybe_auto_submit_jobs(self):
         if (
             not self.auto_job_submission_enabled
@@ -1866,12 +2780,8 @@ class SimulationManager:
         ):
             return
         threshold = self._auto_job_submission_threshold()
-        remaining_jobs = (
-            len(self.simulator.jobs)
-            - len(self.simulator.finished_queue)
-            - sum(job.is_canceled for job in self.simulator.jobs)
-        )
-        if remaining_jobs > threshold:
+        stamping_job_count = self._stamping_unfinished_job_count()
+        if stamping_job_count > threshold:
             return
 
         self.auto_job_submission_triggered = True
@@ -1997,12 +2907,18 @@ class SimulationManager:
     @staticmethod
     def _normalize_reoptimization_method(method):
         if not isinstance(method, str) or not method.strip():
-            raise ValueError("method must be one of: DRL, HLS.")
+            raise ValueError(
+                "method must be one of: Greedy, DRL, HLS, "
+                "InfluenceAwareConstruct."
+            )
         normalized_method = REOPTIMIZATION_COMMAND_ALIASES.get(
             method.strip().lower()
         )
         if normalized_method is None:
-            raise ValueError("method must be one of: DRL, HLS.")
+            raise ValueError(
+                "method must be one of: Greedy, DRL, HLS, "
+                "InfluenceAwareConstruct."
+            )
         return normalized_method
 
     def _get_scheduler(self):
@@ -2232,7 +3148,16 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     "num_jobs": source["num_jobs"],
                     "num_machines": source["num_machines"],
                     "is_default": source["is_default"],
-                    "processes": source.get("processes", []),
+                    "processes": [
+                        {
+                            **process,
+                            "detection_available": (
+                                int(process["id"])
+                                in self.server.manager.detection_process_ids
+                            ),
+                        }
+                        for process in source.get("processes", [])
+                    ],
                 }
                 for source in self.server.manager.datasets
             ]
@@ -2245,13 +3170,37 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if parsed.path == "/api/construction/methods":
+            try:
+                self._send_json(
+                    self.server.manager.construction_methods()
+                )
+            except AttributeError:
+                self._send_json(
+                    {
+                        "default_method": "InfluenceAwareConstruct",
+                        "methods": list(CONSTRUCTION_METHODS),
+                    }
+                )
+            return
         if parsed.path == "/api/health":
             self._send_json({"ok": True})
             return
         if parsed.path == "/api/detection/meta":
             try:
+                query = parse_qs(parsed.query)
+                process_id = int(
+                    query.get("process_id", ["1"])[0]
+                )
                 self._send_json(
-                    self.server.manager.detection_data.meta()
+                    self.server.manager.detection_data_for_process(
+                        process_id
+                    ).meta()
+                )
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=400,
                 )
             except Exception as exc:
                 self._send_json(
@@ -2261,8 +3210,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/detection/machines":
             try:
+                query = parse_qs(parsed.query)
+                process_id = int(
+                    query.get("process_id", ["1"])[0]
+                )
                 self._send_json(
-                    self.server.manager.detection_data.machines()
+                    self.server.manager.detection_data_for_process(
+                        process_id
+                    ).machines()
+                )
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=400,
                 )
             except Exception as exc:
                 self._send_json(
@@ -2283,8 +3243,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     if machine_count_value in {None, ""}
                     else int(machine_count_value)
                 )
+                process_id = int(
+                    query.get("process_id", ["1"])[0]
+                )
                 self._send_json(
-                    self.server.manager.detection_data.overview(
+                    self.server.manager.detection_data_for_process(
+                        process_id
+                    ).overview(
                         t,
                         machine_count=machine_count,
                     )
@@ -2311,7 +3276,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     query.get("process_id", ["1"])[0]
                 )
                 prediction = (
-                    self.server.manager.detection_data.predict(
+                    self.server.manager.detection_data_for_process(
+                        process_id
+                    ).predict(
                         t,
                         machine_count=machine_count,
                     )
@@ -2358,6 +3325,40 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(
                     {"started": False, "error": str(exc)},
                     status=400,
+                )
+            return
+        if parsed.path in {"/api/construction", "/api/construct-initial"}:
+            try:
+                result = self.server.manager.construct_schedule(
+                    dataset_id=body.get("dataset_id"),
+                    method=(
+                        body.get("method")
+                        or body.get("construction_method")
+                        or "InfluenceAwareConstruct"
+                    ),
+                    process_id=body.get("process_id", 1),
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except FileNotFoundError as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=503,
+                )
+            except ConstructionError as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
                 )
             return
         if parsed.path == "/api/speed":
@@ -2479,6 +3480,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     num_samples=body.get("num_samples", 1),
                     seed=body.get("seed", 0),
                     process_id=body.get("process_id", 1),
+                    wait_for_animation=bool(
+                        body.get("wait_for_animation", False)
+                    ),
                 )
                 self._send_json(result)
             except (TypeError, ValueError) as exc:
@@ -2503,7 +3507,73 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 result = self.server.manager.hls_reoptimize(
                     seed=body.get("seed", 0),
                     process_id=body.get("process_id", 1),
+                    wait_for_animation=bool(
+                        body.get("wait_for_animation", False)
+                    ),
                     **options,
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            return
+        if parsed.path in {
+            "/api/construction-reoptimize",
+            "/api/influence-aware-reoptimize",
+        }:
+            try:
+                result = self.server.manager.construction_reoptimize(
+                    method=(
+                        body.get("method")
+                        or "InfluenceAwareConstruct"
+                    ),
+                    process_id=body.get("process_id", 1),
+                    wait_for_animation=bool(
+                        body.get("wait_for_animation", False)
+                    ),
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            return
+        if parsed.path == "/api/reoptimization-animation-complete":
+            try:
+                result = (
+                    self.server.manager.complete_reoptimization_animation(
+                        body.get("animation_id")
+                    )
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            return
+        if parsed.path == "/api/greedy-reoptimize":
+            try:
+                result = self.server.manager.greedy_reoptimize(
+                    process_id=body.get("process_id", 1),
+                    wait_for_animation=bool(
+                        body.get("wait_for_animation", False)
+                    ),
                 )
                 self._send_json(result)
             except (TypeError, ValueError) as exc:
@@ -2522,16 +3592,96 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             try:
                 method = body.get("method", body.get("command"))
                 config = body.get("config", body.get("parameters", {}))
+                command_options = {
+                    "process_id": body.get("process_id", 1),
+                }
+                if "wait_for_animation" in body:
+                    command_options["wait_for_animation"] = bool(
+                        body["wait_for_animation"]
+                    )
                 result = self.server.manager.reoptimize_command(
                     method,
                     config,
-                    process_id=body.get("process_id", 1),
+                    **command_options,
                 )
                 self._send_json(result)
             except (TypeError, ValueError) as exc:
                 self._send_json(
                     {"success": False, "error": str(exc)},
                     status=400,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            return
+        if parsed.path == "/api/model-test/anomaly":
+            try:
+                result = self.server.manager.test_anomaly_model(
+                    process_id=body.get("process_id", 1),
+                    t=body.get("t", 85),
+                    machine_id=body.get("machine_id"),
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=502,
+                )
+            return
+        if parsed.path == "/api/model-test/hls":
+            try:
+                options = {
+                    key: body[key]
+                    for key in HLS_OPTION_FIELDS
+                    if key in body
+                }
+                result = self.server.manager.test_hls_model(
+                    dataset_id=body.get("dataset_id"),
+                    seed=body.get("seed", 0),
+                    **options,
+                )
+                self._send_json(result)
+            except (TypeError, ValueError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
+                )
+            return
+        if parsed.path == "/api/model-test/construction":
+            try:
+                result = self.server.manager.test_construction_model(
+                    dataset_id=body.get("dataset_id"),
+                    method=(
+                        body.get("method")
+                        or "InfluenceAwareConstruct"
+                    ),
+                    process_id=body.get("process_id", 1),
+                )
+                self._send_json(result)
+            except (TypeError, ValueError, FileNotFoundError) as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=400,
+                )
+            except ConstructionError as exc:
+                self._send_json(
+                    {"success": False, "error": str(exc)},
+                    status=500,
                 )
             except Exception as exc:
                 traceback.print_exc()
@@ -2676,8 +3826,8 @@ def serve_dashboard(
         realtime=realtime,
     )
     server, thread = create_dashboard_server(host, port, manager)
-    display_host = host
-    if host in {"0.0.0.0", "::"}:
+    display_host = visualization.get("public_host") or host
+    if not visualization.get("public_host") and host in {"0.0.0.0", "::"}:
         try:
             probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:

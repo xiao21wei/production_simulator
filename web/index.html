@@ -10,15 +10,32 @@
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark"></span>
-      <div>
+      <div class="brand-copy">
         <h1>生产调度实时监控</h1>
-        <p>Production Scheduling Real-time Monitoring</p>
+        <nav class="page-switch" aria-label="页面切换">
+          <button
+            id="monitor-view-button"
+            class="page-switch-button active"
+            type="button"
+            aria-selected="true"
+          >
+            实时监控
+          </button>
+          <button
+            id="model-test-view-button"
+            class="page-switch-button"
+            type="button"
+            aria-selected="false"
+          >
+            模型测试
+          </button>
+        </nav>
       </div>
     </div>
 
-    <div class="metrics">
+    <div class="metrics" role="group" aria-label="关键指标">
       <div class="metric">
-        <span>仿真时刻</span>
+        <span>运行时刻</span>
         <strong id="current-time">0</strong>
       </div>
       <div class="metric">
@@ -63,35 +80,37 @@
     </div>
   </header>
 
+  <div id="monitor-page" class="page-view">
   <section class="run-toolbar">
-    <label class="dataset-picker" for="dataset-select">仿真数据源</label>
-    <select id="dataset-select" aria-label="选择仿真数据源">
+    <label class="dataset-picker" for="dataset-select">数据源</label>
+    <select id="dataset-select" aria-label="选择数据源">
       <option value="">正在读取数据集...</option>
     </select>
     <label class="reoptimizer-picker" for="reoptimizer-select">
       重调度方式
     </label>
     <select id="reoptimizer-select" aria-label="选择重调度方式">
-      <option value="mofjsp" selected>DRL</option>
+      <option value="greedy" selected>Greedy</option>
+      <option value="mofjsp">DRL</option>
       <option value="hls">HLS</option>
+      <option value="influence_aware">IAC</option>
     </select>
     <button id="reoptimize-button" class="secondary-button" type="button" disabled>
       执行重调度
     </button>
     <button id="pause-button" class="secondary-button pause-button" type="button" disabled>
-      暂停仿真
+      暂停
     </button>
     <button id="stop-button" class="secondary-button danger-button" type="button" disabled>
-      停止仿真
+      停止
     </button>
-    <button id="start-button" type="button">启动仿真</button>
+    <button id="start-button" type="button">开始运行</button>
   </section>
 
   <main class="dashboard">
     <aside class="panel job-panel">
       <div class="panel-heading">
         <div>
-          <span class="eyebrow">ORDER / JOB STATUS</span>
           <h2>订单与作业</h2>
         </div>
         <span id="order-count" class="count-badge">0 单</span>
@@ -121,7 +140,7 @@
       <details id="order-list-panel" class="order-list-panel" open>
         <summary class="order-list-heading">
           <span>订单列表</span>
-          <small>按提交仿真时刻命名</small>
+          <small>按提交时刻命名</small>
         </summary>
         <div id="order-list" class="order-list">
           <div class="empty-state">等待订单</div>
@@ -133,7 +152,7 @@
           <span id="job-count" class="subsection-count">0</span>
         </summary>
         <div id="job-list" class="job-list">
-          <div class="empty-state">等待仿真启动</div>
+          <div class="empty-state">等待运行开始</div>
         </div>
       </details>
     </aside>
@@ -233,10 +252,10 @@
       >
         <div class="machine-board-summary">
           <span>异常检测数据</span>
-          <span id="machine-board-summary">等待仿真启动</span>
+          <span id="machine-board-summary">等待运行开始</span>
         </div>
         <div id="machine-card-grid" class="machine-card-grid">
-          <div class="empty-state">等待仿真启动</div>
+          <div class="empty-state">等待运行开始</div>
         </div>
       </div>
 
@@ -248,10 +267,10 @@
       >
         <div class="material-board-summary">
           <span>当前工艺机器物料库存</span>
-          <span id="material-board-summary">等待仿真启动</span>
+          <span id="material-board-summary">等待运行开始</span>
         </div>
         <div id="material-board-grid" class="material-board-grid">
-          <div class="empty-state">等待仿真启动</div>
+          <div class="empty-state">等待运行开始</div>
         </div>
       </div>
     </section>
@@ -259,7 +278,6 @@
     <aside class="panel event-panel">
       <div class="panel-heading">
         <div>
-          <span class="eyebrow">ANOMALY MONITOR</span>
           <h2>异常列表</h2>
         </div>
         <span id="anomaly-count" class="count-badge">0</span>
@@ -282,6 +300,345 @@
         <div class="empty-state">暂无异常事件</div>
       </div>
     </aside>
+  </main>
+  </div>
+
+  <main id="model-test-page" class="model-test-page page-view hidden">
+    <section class="model-test-shell">
+      <div class="model-test-tabs" role="tablist" aria-label="测试模型">
+        <button
+          id="anomaly-model-tab"
+          class="model-test-tab active"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="anomaly-model-panel"
+        >
+          异常检测模型
+        </button>
+        <button
+          id="hls-model-tab"
+          class="model-test-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="hls-model-panel"
+        >
+          HLS 调度模型
+        </button>
+        <button
+          id="construction-model-tab"
+          class="model-test-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="construction-model-panel"
+        >
+          IAC 调度模型
+        </button>
+        <span id="model-test-status" class="status-pill idle">等待测试</span>
+      </div>
+
+      <section
+        id="anomaly-model-panel"
+        class="model-test-panel"
+        role="tabpanel"
+        aria-labelledby="anomaly-model-tab"
+      >
+        <div class="model-test-controls">
+          <div class="model-test-parameters">
+            <label class="model-test-field">
+              <span>测试数据集</span>
+              <small>冲压设备异常检测模型</small>
+              <select id="anomaly-test-dataset-select"></select>
+            </label>
+            <label class="model-test-field">
+              <span>检测设备</span>
+              <small>选择用于模型输入的单台设备</small>
+              <select id="anomaly-test-machine-select"></select>
+            </label>
+            <label class="model-test-field">
+              <span>测试时间点</span>
+              <small id="anomaly-test-time-hint">
+                范围：0 至数据末尾 · 默认：85
+              </small>
+              <input id="anomaly-test-time" type="number" min="0" value="85">
+            </label>
+            <div class="model-test-field model-test-readonly-field">
+              <span>模型版本</span>
+              <small>由当前检测服务契约自动读取</small>
+              <strong id="anomaly-test-model-name">正在读取模型...</strong>
+              <em id="anomaly-test-model-artifact">MetroPT CNN-LSTM</em>
+            </div>
+          </div>
+          <div class="model-test-actions">
+          <button id="run-anomaly-model-test-button" type="button">
+            运行测试
+          </button>
+          </div>
+        </div>
+        <div id="anomaly-model-contract" class="anomaly-model-contract">
+          <div>
+            <span>输入窗口</span>
+            <strong id="anomaly-contract-window">--</strong>
+          </div>
+          <div>
+            <span>预测范围</span>
+            <strong id="anomaly-contract-horizon">--</strong>
+          </div>
+          <div>
+            <span>窗口步长</span>
+            <strong id="anomaly-contract-stride">--</strong>
+          </div>
+          <div>
+            <span>输入形状</span>
+            <strong id="anomaly-contract-shape">--</strong>
+          </div>
+          <div>
+            <span>采样间隔</span>
+            <strong id="anomaly-contract-sample">--</strong>
+          </div>
+          <div>
+            <span>决策阈值</span>
+            <strong id="anomaly-contract-threshold">--</strong>
+          </div>
+        </div>
+        <div
+          id="anomaly-feature-strip"
+          class="anomaly-feature-strip"
+          aria-label="模型输入特征"
+        ></div>
+      </section>
+
+      <section
+        id="hls-model-panel"
+        class="model-test-panel hidden"
+        role="tabpanel"
+        aria-labelledby="hls-model-tab"
+      >
+        <div class="model-test-controls">
+          <div class="model-test-parameters hls-test-parameters">
+            <label class="model-test-field">
+              <span>测试数据集</span>
+              <small>选择需要测试的完整调度数据集</small>
+              <select id="hls-test-dataset-select"></select>
+            </label>
+            <label class="model-test-field">
+              <span>随机种子</span>
+              <small>范围：0–4294967295 · 默认：0</small>
+              <input id="hls-test-seed" type="number" min="0" value="0">
+            </label>
+            <label class="model-test-field">
+              <span>求解时间（秒）</span>
+              <small>范围：1–300 · 默认：20</small>
+              <input
+                id="hls-test-time"
+                type="number"
+                min="1"
+                max="300"
+                value="20"
+              >
+            </label>
+            <label class="model-test-field">
+              <span>搜索模式</span>
+              <small>范围：0–1 · 默认：0.6</small>
+              <input
+                id="hls-test-search-mode"
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value="0.6"
+              >
+            </label>
+            <label class="model-test-field">
+              <span>随机策略</span>
+              <small>范围：0–1 · 默认：0.5</small>
+              <input
+                id="hls-test-random-strategy"
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value="0.5"
+              >
+            </label>
+            <label class="model-test-field">
+              <span>最大重复次数</span>
+              <small>范围：≥1 · 默认：1000</small>
+              <input
+                id="hls-test-max-repeat"
+                type="number"
+                min="1"
+                value="1000"
+              >
+            </label>
+            <label class="model-test-field">
+              <span>最大迭代次数</span>
+              <small>范围：≥1 · 默认：45</small>
+              <input
+                id="hls-test-max-iter"
+                type="number"
+                min="1"
+                value="45"
+              >
+            </label>
+            <label class="model-test-field">
+              <span>种群规模</span>
+              <small>范围：≥2 · 默认：32</small>
+              <input
+                id="hls-test-population"
+                type="number"
+                min="2"
+                value="32"
+              >
+            </label>
+            <label class="model-test-field">
+              <span>禁忌长度</span>
+              <small>范围：≥1 · 默认：30</small>
+              <input
+                id="hls-test-tabu-length"
+                type="number"
+                min="1"
+                value="30"
+              >
+            </label>
+          </div>
+          <div class="model-test-actions">
+            <button id="run-hls-model-test-button" type="button">
+              运行测试
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="construction-model-panel"
+        class="model-test-panel hidden"
+        role="tabpanel"
+        aria-labelledby="construction-model-tab"
+      >
+        <div class="model-test-controls">
+          <div class="model-test-parameters hls-test-parameters">
+            <label class="model-test-field">
+              <span>测试数据集</span>
+              <small>默认使用所选实例的冲压工艺数据</small>
+              <select id="construction-test-dataset-select"></select>
+            </label>
+            <label class="model-test-field">
+              <span>构造方法</span>
+              <small>默认选择 IAC，可切换其他对比方法</small>
+              <select id="construction-test-method-select"></select>
+            </label>
+          </div>
+          <div class="model-test-actions">
+            <button id="run-construction-model-test-button" type="button">
+              运行测试
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="model-test-result">
+        <div class="model-test-result-heading">
+          <h3>测试结果</h3>
+          <button
+            id="clear-model-test-result-button"
+            class="model-test-clear-button"
+            type="button"
+          >
+            清空
+          </button>
+        </div>
+        <div id="model-test-summary" class="model-test-summary hidden"></div>
+        <section
+          id="anomaly-test-visualization"
+          class="anomaly-test-visualization hidden"
+        >
+          <div class="anomaly-result-heading">
+            <div>
+              <span>MODEL TEST EVIDENCE</span>
+              <h3>模型输入与单点诊断</h3>
+            </div>
+            <p id="anomaly-result-context">等待模型输出</p>
+          </div>
+
+          <div id="anomaly-kpi-grid" class="anomaly-kpi-grid"></div>
+
+          <div class="anomaly-evidence-grid">
+            <article class="anomaly-evidence-card anomaly-heatmap-card">
+              <div class="anomaly-card-heading">
+                <div>
+                  <h3>模型输入窗口</h3>
+                  <span>15 通道 × 历史窗口，颜色为通道内标准分</span>
+                </div>
+                <strong id="anomaly-window-shape">--</strong>
+              </div>
+              <div
+                id="anomaly-window-heatmap"
+                class="anomaly-window-heatmap"
+              ></div>
+            </article>
+            <article class="anomaly-evidence-card">
+              <div class="anomaly-card-heading">
+                <div>
+                  <h3>关键信号趋势</h3>
+                  <span>压力、压差、油温和电机电流的标准分</span>
+                </div>
+              </div>
+              <div
+                id="anomaly-key-signals-chart"
+                class="anomaly-key-signals-chart"
+              ></div>
+            </article>
+          </div>
+
+          <div class="anomaly-diagnostic-grid">
+            <article class="anomaly-evidence-card">
+              <div class="anomaly-card-heading">
+                <div>
+                  <h3>未来故障标签</h3>
+                  <span>模型预测范围内的逐点真值</span>
+                </div>
+                <strong id="anomaly-future-summary">--</strong>
+              </div>
+              <div
+                id="anomaly-future-labels"
+                class="anomaly-future-labels"
+              ></div>
+            </article>
+            <article class="anomaly-evidence-card">
+              <div class="anomaly-card-heading">
+                <div>
+                  <h3>故障事件与测试点</h3>
+                  <span>红色区间为数据真值，竖线为当前测试时间点</span>
+                </div>
+              </div>
+              <div
+                id="anomaly-event-timeline"
+                class="anomaly-event-timeline"
+              ></div>
+              <div id="anomaly-event-table" class="anomaly-event-table"></div>
+            </article>
+          </div>
+          <p id="anomaly-evidence-note" class="anomaly-evidence-note"></p>
+        </section>
+        <section id="hls-gantt-section" class="model-test-gantt hidden">
+          <div class="model-test-gantt-heading">
+            <h3 id="model-test-gantt-title">HLS 调度甘特图</h3>
+            <span id="model-test-gantt-subtitle">
+              按机器展示工序开始与结束时间
+            </span>
+          </div>
+          <div id="hls-gantt-chart" class="model-test-gantt-chart"></div>
+          <div id="hls-gantt-tooltip" class="hls-gantt-tooltip hidden"></div>
+        </section>
+        <details id="model-test-raw-details" class="model-test-raw-details">
+          <summary>完整运行结果</summary>
+          <pre id="model-test-output">尚未运行模型测试。</pre>
+        </details>
+      </section>
+    </section>
   </main>
 
   <dialog
@@ -313,27 +670,27 @@
         <select id="anomaly-type-select">
           <option
             value="short_failure"
-            data-duration="3"
-            data-min="1"
-            data-max="5"
-          >
-            短故障（1–5，默认 3）
-          </option>
-          <option
-            value="medium_failure"
             data-duration="10"
             data-min="5"
             data-max="15"
           >
-            中等故障（5–15，默认 10）
+            短故障（5–15，默认 10）
+          </option>
+          <option
+            value="medium_failure"
+            data-duration="20"
+            data-min="15"
+            data-max="25"
+          >
+            中等故障（15–25，默认 20）
           </option>
           <option
             value="long_failure"
             data-duration="30"
-            data-min="15"
-            data-max="45"
+            data-min="25"
+            data-max="35"
           >
-            长故障（15–45，默认 30）
+            长故障（25–35，默认 30）
           </option>
           <option
             value="degraded"
@@ -350,13 +707,13 @@
         <input
           id="anomaly-duration"
           type="number"
-          min="1"
-          max="5"
+          min="5"
+          max="15"
           step="1"
-          value="3"
+          value="10"
         >
         <small id="anomaly-duration-hint" class="anomaly-duration-hint">
-          可选范围：1–5，默认持续时间：3
+          可选范围：5–15，默认持续时间：10
         </small>
       </label>
     </div>

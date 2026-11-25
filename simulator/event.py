@@ -177,6 +177,7 @@ class MaterialReplenishmentEvent(BaseEvent):
         available_materials=None,
         target_materials=None,
         shortage_materials=None,
+        lead_time=0.0,
     ):
         super().__init__(id, timestamp)
         self.machine_id = int(machine_id)
@@ -206,6 +207,7 @@ class MaterialReplenishmentEvent(BaseEvent):
             for material_id, quantity
             in (shortage_materials or {}).items()
         }
+        self.lead_time = float(lead_time)
         self.added_materials = {}
         self.result = None
 

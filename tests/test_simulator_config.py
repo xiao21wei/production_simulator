@@ -15,7 +15,7 @@ class SimulatorConfigTest(unittest.TestCase):
             Path("simulator_config.json").resolve(),
         )
         self.assertEqual(config["time"]["speed"], 10.0)
-        self.assertFalse(
+        self.assertTrue(
             config["anomaly_handling"]["enabled"]
         )
         self.assertEqual(config["visualization"]["speed"], 2.0)
@@ -23,10 +23,28 @@ class SimulatorConfigTest(unittest.TestCase):
             config["visualization"]["display_percent"], 100
         )
         self.assertEqual(config["visualization"]["host"], "0.0.0.0")
+        self.assertEqual(
+            config["visualization"]["public_host"],
+            "152.136.171.71",
+        )
         self.assertEqual(config["visualization"]["port"], 8000)
         self.assertEqual(
             config["detection_data"]["base_url"],
-            "http://192.168.1.68:8068",
+            "http://127.0.0.1:8068",
+        )
+        self.assertEqual(
+            config["detection_data"]["process_base_urls"],
+            {
+                "1": "http://127.0.0.1:8068",
+                "2": "http://127.0.0.1:8078",
+            },
+        )
+        self.assertEqual(
+            config["detection_data"]["process_protocols"],
+            {
+                "1": "legacy",
+                "2": "mfddt",
+            },
         )
         self.assertEqual(
             config["detection_data"]["history_points"],
@@ -56,7 +74,7 @@ class SimulatorConfigTest(unittest.TestCase):
             config["simulation"][
                 "material_replenishment_lead_time"
             ],
-            5.0,
+            20.0,
         )
         self.assertEqual(
             config["simulation"][
@@ -156,6 +174,16 @@ class SimulatorConfigTest(unittest.TestCase):
                 json.dumps(config),
                 encoding="utf-8",
             )
+
+            with self.assertRaises(ValueError):
+                load_simulator_config(custom_path)
+
+    def test_invalid_public_host_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_path = Path(temp_dir) / "invalid-public-host.json"
+            config = json.loads(Path(DEFAULT_CONFIG_PATH).read_text("utf-8"))
+            config["visualization"]["public_host"] = ""
+            custom_path.write_text(json.dumps(config), encoding="utf-8")
 
             with self.assertRaises(ValueError):
                 load_simulator_config(custom_path)

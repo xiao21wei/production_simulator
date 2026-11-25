@@ -52,7 +52,7 @@ PROCESS_INTERSTAGE_ENERGY = {
     3: 5,
     4: 4,
 }
-DEFAULT_MATERIAL_REPLENISHMENT_LEAD_TIME = 5.0
+DEFAULT_MATERIAL_REPLENISHMENT_LEAD_TIME = 20.0
 DEFAULT_MATERIAL_REPLENISHMENT_TARGET_FACTOR = 3.0
 
 
@@ -101,6 +101,7 @@ class Simulator:
         self.order_batches = []
         self.canceled_orders = []
         self.deferred_anomaly_tasks = {}
+        self.deferred_process_stage_tasks = {}
         self.pending_material_recoveries = {}
         self.scheduled_operations = []
         self.completed_operations = set()
@@ -552,6 +553,7 @@ class Simulator:
         self.finished_queue = []
         self.canceled_orders = []
         self.deferred_anomaly_tasks = {}
+        self.deferred_process_stage_tasks = {}
         self.handleScheduleEvent(ScheduleEvent(self.newEventId(), 0))
 
     def init(
@@ -665,6 +667,7 @@ class Simulator:
         self.finished_queue = []
         self.canceled_orders = []
         self.deferred_anomaly_tasks = {}
+        self.deferred_process_stage_tasks = {}
 
         # 初始 ScheduleEvent 从 job_queue 获取作业，生成完整机器队列
         self.handleScheduleEvent(ScheduleEvent(self.newEventId(), 0))
@@ -1205,6 +1208,11 @@ class Simulator:
         self.canceled_orders.append(order)
 
         job.canceled_at = now
+        self.deferred_process_stage_tasks = {
+            key: value
+            for key, value in self.deferred_process_stage_tasks.items()
+            if key[0] != job_id
+        }
         for task in removed_tasks:
             task.status = "canceled"
             task.waiting_time = 0
@@ -1686,7 +1694,7 @@ class Simulator:
                 key = (job.job_id, task.operation_id)
                 if (
                     task.status not in {"pending", "scheduled"}
-                    or key in self.deferred_anomaly_tasks
+                    or self._isDeferredTask(key)
                 ):
                     continue
                 if any(
@@ -1694,20 +1702,41 @@ class Simulator:
                     for candidate in task.eligible_machines
                 ):
                     continue
+                recoverable_machines = [
+                    candidate
+                    for candidate in task.eligible_machines
+                    if self.machines[candidate].recovery_time is not None
+                ]
+                if not recoverable_machines:
+                    continue
                 fallback_machine = min(
-                    task.eligible_machines,
+                    recoverable_machines,
                     key=lambda candidate: (
-                        self.machines[candidate].recovery_time
-                        or float("inf"),
+                        self.machines[candidate].recovery_time,
                         candidate,
                     ),
                 )
                 recovery_time = (
                     self.machines[fallback_machine].recovery_time
-                    or now
                 )
-                self.deferred_anomaly_tasks[key] = fallback_machine
                 task.ready_not_before = max(now, recovery_time)
+                if task.stage_id > 1:
+                    self.deferred_process_stage_tasks[key] = {
+                        "target_machine": fallback_machine,
+                        "recovery_time": recovery_time,
+                        "stage_id": task.stage_id,
+                        "ready_time": now,
+                    }
+                    for later_task in job.tasks:
+                        if (
+                            later_task.stage_id == task.stage_id
+                            and later_task.operation_id
+                            > task.operation_id
+                            and later_task.status == "pending"
+                        ):
+                            later_task.status = "blocked"
+                else:
+                    self.deferred_anomaly_tasks[key] = fallback_machine
                 deferred.append(key)
         return deferred
 
@@ -2082,6 +2111,12 @@ class Simulator:
                 event.machine_id,
                 event.timestamp,
             )
+        deferred_stage_events = (
+            self._queueDeferredProcessStageSchedules(
+                event.machine_id,
+                event.timestamp,
+            )
+        )
         self.refreshRealtimeObjectives()
         recovery_reschedule_method = None
         if (
@@ -2103,6 +2138,9 @@ class Simulator:
             "recovered_at": event.timestamp,
             "reschedule_method": recovery_reschedule_method,
             "reoptimization": recovery_reoptimization,
+            "deferred_process_stage_event_ids": [
+                scheduled.id for scheduled in deferred_stage_events
+            ],
         }
         return True
 
@@ -2194,6 +2232,76 @@ class Simulator:
                 template.material_consumption
             ),
         )
+
+    def _queueDeferredProcessStageSchedules(
+        self,
+        machine_id,
+        recovery_time,
+    ):
+        """Re-enter deferred stage tasks into batch scheduling after recovery."""
+        deferred_keys = [
+            key
+            for key, data in self.deferred_process_stage_tasks.items()
+            if data["target_machine"] == machine_id
+        ]
+        if not deferred_keys:
+            return []
+
+        jobs_by_stage = {}
+        for key in deferred_keys:
+            data = self.deferred_process_stage_tasks.pop(key)
+            job_id, operation_id = key
+            job = self.jobs[job_id]
+            task = job.tasks[operation_id]
+            if (
+                job.is_canceled
+                or task.status not in {"pending", "blocked"}
+            ):
+                continue
+            task.ready_not_before = None
+            jobs_by_stage.setdefault(
+                data["stage_id"],
+                {},
+            )[job_id] = max(
+                float(recovery_time),
+                float(data["ready_time"]),
+            )
+
+        scheduled_events = []
+        for stage_id, job_ready_times in jobs_by_stage.items():
+            batch_event = next(
+                (
+                    event
+                    for event in self.event_queue
+                    if (
+                        isinstance(
+                            event,
+                            ProcessStageBatchScheduleEvent,
+                        )
+                        and event.stage_id == stage_id
+                        and math.isclose(
+                            float(event.timestamp),
+                            float(recovery_time),
+                            rel_tol=0,
+                            abs_tol=1e-9,
+                        )
+                    )
+                ),
+                None,
+            )
+            if batch_event is None:
+                batch_event = ProcessStageBatchScheduleEvent(
+                    self.newEventId(),
+                    recovery_time,
+                    stage_id,
+                    0.0,
+                )
+                self.addEvent(batch_event)
+            for job_id, ready_time in job_ready_times.items():
+                batch_event.add_job(job_id, ready_time)
+            scheduled_events.append(batch_event)
+        self.updateEventQueue()
+        return scheduled_events
 
     def _enqueueDeferredAnomalyTasks(self, machine_id, recovery_time):
         deferred_keys = [
@@ -2593,6 +2701,12 @@ class Simulator:
         }
         return normalized_stage_ids, machine_ids
 
+    def _isDeferredTask(self, key):
+        return (
+            key in self.deferred_anomaly_tasks
+            or key in self.deferred_process_stage_tasks
+        )
+
     def _greedyUnfinishedAssignments(
         self,
         excluded_machines=None,
@@ -2618,7 +2732,7 @@ class Simulator:
                 if (
                     task.status not in {"pending", "scheduled"}
                     or task.stage_id not in scoped_stage_ids
-                    or key in self.deferred_anomaly_tasks
+                    or self._isDeferredTask(key)
                 ):
                     continue
                 candidates = [
@@ -2662,10 +2776,7 @@ class Simulator:
         )
         return {
             "applied": True,
-            "unfinished_task_count": result["unfinished_task_count"],
-            "moved_operation_count": result["moved_operation_count"],
-            "transport_time_added": result["transport_time_added"],
-            "transport_energy_added": result["transport_energy_added"],
+            **result,
         }
 
     def reoptimizeUnfinishedOperations(
@@ -2686,10 +2797,36 @@ class Simulator:
         scoped_stage_ids, scoped_machine_ids = self._process_scope(
             stage_ids
         )
+        self.deferUnavailableTasks(current_time=now)
+        old_queue_positions = {}
+        for machine_id in sorted(scoped_machine_ids):
+            machine_operations = sorted(
+                (
+                    operation
+                    for operation in self.planned_operations
+                    if (
+                        operation.machine_id == machine_id
+                        and operation.status in {"pending", "scheduled"}
+                    )
+                ),
+                key=lambda operation: (
+                    operation.start_time,
+                    operation.end_time,
+                    operation.job_id,
+                    operation.operation_id,
+                ),
+            )
+            for index, operation in enumerate(machine_operations):
+                old_queue_positions[
+                    (operation.job_id, operation.operation_id)
+                ] = {
+                    "machine_id": machine_id,
+                    "index": index,
+                }
         assignments = {}
         for key, machine_id in machine_assignments.items():
             key = tuple(key)
-            if key in self.deferred_anomaly_tasks:
+            if self._isDeferredTask(key):
                 continue
             task = self.jobs[key[0]].tasks[key[1]]
             if (
@@ -2778,8 +2915,9 @@ class Simulator:
             for task in job.tasks
             if task.status in {"pending", "scheduled"}
             and task.stage_id in scoped_stage_ids
-            and (job.job_id, task.operation_id)
-            not in self.deferred_anomaly_tasks
+            and not self._isDeferredTask(
+                (job.job_id, task.operation_id)
+            )
         ]
         missing_assignments = [
             (job_id, task.operation_id)
@@ -2924,10 +3062,9 @@ class Simulator:
             if next_task is None:
                 continue
             next_operation_id = next_task.operation_id
-            if (
-                job.job_id,
-                next_operation_id,
-            ) in self.deferred_anomaly_tasks:
+            if self._isDeferredTask(
+                (job.job_id, next_operation_id)
+            ):
                 continue
 
             if next_operation_id == 0:
@@ -3400,10 +3537,9 @@ class Simulator:
 
             if (
                 operation_id + 1 < job.operation_count
-                and (
-                    job_id,
-                    operation_id + 1,
-                ) not in self.deferred_anomaly_tasks
+                and not self._isDeferredTask(
+                    (job_id, operation_id + 1)
+                )
                 and job.tasks[operation_id + 1].status
                 in {"pending", "scheduled"}
                 and (job_id, operation_id + 1) in assignments
@@ -3462,6 +3598,45 @@ class Simulator:
                 operation.operation_id,
             )
         )
+        new_queue_positions = {}
+        for machine_id in sorted(scoped_machine_ids):
+            machine_operations = sorted(
+                (
+                    operation
+                    for operation in self.planned_operations
+                    if (
+                        operation.machine_id == machine_id
+                        and operation.status in {"pending", "scheduled"}
+                    )
+                ),
+                key=lambda operation: (
+                    operation.start_time,
+                    operation.end_time,
+                    operation.job_id,
+                    operation.operation_id,
+                ),
+            )
+            for index, operation in enumerate(machine_operations):
+                new_queue_positions[
+                    (operation.job_id, operation.operation_id)
+                ] = {
+                    "machine_id": machine_id,
+                    "index": index,
+                }
+        for operation in moved_operations:
+            key = (operation["job_id"], operation["operation_id"])
+            old_position = old_queue_positions.get(key, {})
+            new_position = new_queue_positions.get(key, {})
+            operation["from_queue_machine_id"] = old_position.get(
+                "machine_id",
+                operation["old_machine_id"],
+            )
+            operation["from_queue_index"] = old_position.get("index", 0)
+            operation["to_queue_machine_id"] = new_position.get(
+                "machine_id",
+                operation["new_machine_id"],
+            )
+            operation["to_queue_index"] = new_position.get("index", 0)
         self.scheduleTransportFinishEvents(
             [
                 operation
@@ -4225,6 +4400,51 @@ class Simulator:
             timestamp,
         )
 
+    def _batchTemporaryFallbackMachine(self, task, current_time):
+        """Return a recovery-bound machine when every candidate is unavailable."""
+        eligible_machines = [
+            int(machine_id)
+            for machine_id in task.eligible_machines
+            if machine_id is not None
+        ]
+        if not eligible_machines:
+            raise RuntimeError(
+                f"Task {task.task_id} has no eligible machine."
+            )
+        available = [
+            machine_id
+            for machine_id in eligible_machines
+            if self.machines[machine_id].machine_status
+            not in {"failed", "repairing"}
+        ]
+        if available:
+            return None
+
+        recoverable = []
+        for machine_id in eligible_machines:
+            machine = self.machines[machine_id]
+            recovery_time = machine.recovery_time
+            if (
+                recovery_time is None
+                or float(recovery_time) < float(current_time) - 1e-9
+            ):
+                continue
+            recoverable.append(
+                (
+                    float(recovery_time),
+                    task.processing_times[machine_id],
+                    machine_id,
+                )
+            )
+        if not recoverable:
+            raise RuntimeError(
+                f"No machine can process task {task.task_id}; "
+                "all eligible machines are unavailable without "
+                "a pending recovery time."
+            )
+        recovery_time, _, machine_id = min(recoverable)
+        return machine_id, recovery_time
+
     def _estimateBatchMachine(
         self,
         job_id,
@@ -4282,6 +4502,7 @@ class Simulator:
         job_ready_times,
         stage_id,
         timestamp=None,
+        deferred_operations=None,
     ):
         """
         Schedule one complete target process for a batch of Jobs.
@@ -4301,6 +4522,8 @@ class Simulator:
         )
         if timestamp is not None:
             batch_time = max(float(timestamp), self.curr_time)
+        if deferred_operations is None:
+            deferred_operations = []
 
         operation_queue = []
         for job_id, ready_time in normalized_job_ready_times.items():
@@ -4352,7 +4575,42 @@ class Simulator:
                 job.is_canceled
                 or task.stage_id != stage_id
                 or task.status != "pending"
+                or (job_id, operation_id)
+                in self.deferred_process_stage_tasks
             ):
+                continue
+
+            fallback = self._batchTemporaryFallbackMachine(
+                task,
+                batch_time,
+            )
+            if fallback is not None:
+                fallback_machine, recovery_time = fallback
+                task.ready_not_before = recovery_time
+                self.deferred_process_stage_tasks[
+                    (job_id, operation_id)
+                ] = {
+                    "target_machine": fallback_machine,
+                    "recovery_time": recovery_time,
+                    "stage_id": stage_id,
+                    "ready_time": fallback_time,
+                }
+                for later_task in job.tasks:
+                    if (
+                        later_task.stage_id == stage_id
+                        and later_task.operation_id > operation_id
+                        and later_task.status == "pending"
+                    ):
+                        later_task.status = "blocked"
+                deferred_operations.append(
+                    {
+                        "job_id": job_id,
+                        "operation_id": operation_id,
+                        "stage_id": stage_id,
+                        "machine_id": fallback_machine,
+                        "recovery_time": recovery_time,
+                    }
+                )
                 continue
 
             machine_id = self._estimateBatchMachine(
@@ -4506,10 +4764,7 @@ class Simulator:
     def scheduleOperation(self, job_id, operation_id, timestamp):
         if self.log_tag:
             print(f"Operation {job_id}-{operation_id} scheduled at time {timestamp}")
-        if (
-            (job_id, operation_id)
-            in self.deferred_anomaly_tasks
-        ):
+        if self._isDeferredTask((job_id, operation_id)):
             return
         if (
             self.jobs[job_id].is_canceled
@@ -4895,6 +5150,7 @@ class Simulator:
             available,
             target_materials=target_materials,
             shortage_materials=shortages,
+            lead_time=self.material_replenishment_lead_time,
         )
         recovery_event = MaterialRecoveryEvent(
             self.newEventId(),
@@ -5443,10 +5699,12 @@ class Simulator:
                 and not self.jobs[job_id].is_canceled
             )
         }
+        deferred_operations = []
         planned_operations = self.scheduleProcessStageBatch(
             job_ready_times,
             event.stage_id,
             event.timestamp,
+            deferred_operations=deferred_operations,
         )
         materialized_transport_events = []
         for operation in planned_operations:
@@ -5481,6 +5739,8 @@ class Simulator:
             "job_ids": list(job_ready_times),
             "job_count": len(job_ready_times),
             "planned_operation_count": len(planned_operations),
+            "deferred_operation_count": len(deferred_operations),
+            "deferred_operations": deferred_operations,
             "materialized_transport_event_count": len(
                 materialized_transport_events
             ),

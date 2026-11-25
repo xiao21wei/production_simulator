@@ -35,9 +35,10 @@ python --version
 | `paths.*` | 输入文件、排程结果和甘特图路径 |
 | `simulation.*` | 日志、随机种子、交期系数和辅助能耗等参数 |
 | `simulation.process_stage_batch_window` | 工艺流转批次窗口，默认 `10.0` 仿真时间单位 |
-| `simulation.material_replenishment_lead_time` | 物料补料到恢复的到达时间，默认 `5.0` 仿真时间单位 |
+| `simulation.material_replenishment_lead_time` | 物料补料到恢复的到达时间，默认 `20.0` 仿真时间单位 |
 | `simulation.material_replenishment_target_factor` | 补料阈值相对当前工序需求的倍数，默认 `3.0` |
-| `anomaly_handling.enabled` | 是否启用设备异常处置，默认 `false` |
+| `anomaly_handling.enabled` | 是否启用设备异常处置，默认 `true` |
+| `visualization.public_host` | 控制台输出的对外访问主机名或 IP；为空时自动探测本地地址 |
 | `visualization.speed` | Web 动画使用的默认倍速 |
 | `visualization.display_percent` | 中央看板显示比例，范围 25–300，默认 100 |
 | `detection_data.base_url` | 流式异常检测服务地址 |
@@ -105,8 +106,23 @@ Job 级和 Task 级消耗，后三工艺的具体 Task 同时保存自己的
 `1.20` 倍准备基础余量；动态 Job 不计入初始库存。四个工艺的每道工序开始前都会校验
 当前机器库存：库存足够时按该工序的实际需求量一次性扣减并开始加工；
 库存不足时保持工序在机器队首，依次生成物料补充事件和物料恢复事件，
-两者默认间隔 `5.0` 个仿真时间单位，用于模拟物料到达机器；恢复确认后
+两者默认间隔 `20.0` 个仿真时间单位，用于模拟物料到达机器；恢复确认后
 再重新触发生效的工序开始事件。
+
+Web 时间轴会在发生缺料的机器上显示整条轨道橙红报警背景，并在左侧机器
+标签显示固定的“缺料”状态徽标。报警从物料补充事件开始，持续到对应的
+物料恢复事件，恢复库存后立即解除。徽标提示中显示作业、机器、起止时间
+以及物料缺口和待补数量。
+
+发生设备异常时，对应机器轨道会显示红色动态报警背景，并在左侧显示
+“短故障 / 中故障 / 长故障 / 降额”状态徽标。设备异常从
+`MachineAnomalyEvent` 开始，持续到 `MachineRecoveryEvent`，恢复后自动解除。
+设备异常使用红色，物料异常使用橙色；同一机器同时存在两类异常时，轨道
+使用橙红组合报警背景并同时显示两个状态徽标。
+
+上方四个工艺标签会同步显示活动告警：橙色表示该工艺存在未恢复的物料
+异常，红色表示存在活动设备异常，两种异常同时存在时显示橙红组合渐变。
+标签内分别显示异常机器数量，即使当前正在查看其他工艺，也能及时发现异常。
 
 每个 Job 保留同一个 `job_id`，所有工艺的工序使用全局连续的
 `operation_id`，并通过 `stage_id` 区分所属工艺。Job 只有完成总装最后一道
@@ -127,6 +143,11 @@ Job 级和 Task 级消耗，后三工艺的具体 Task 同时保存自己的
 仍会补写完整运输段，并生成 `historical=true` 的 `TransportFinishEvent`；
 该事件时间戳保留真实运输完成时刻，不会回拨仿真时钟。该机制统一应用于
 焊装、涂装和总装，减少逐 Job 追加计划造成的 Web 全量重绘。
+
+如果某道工序的全部候选机器在执行批次调度时都处于 `failed` 或 `repairing`
+状态，模拟器不会终止运行，而是记录该 Job 在目标工艺中的待恢复位置，继续
+调度同批次的其他 Job。最早恢复的目标机器产生 `MachineRecoveryEvent` 后，
+该 Job 会重新进入相应工艺的批量调度，重新计算运输、等待和加工时间。
 
 Web 的 `plan_revision` 只在机器分配或计划结构发生变化时递增。批次排程、
 插单、取消订单、DRL/HLS 重调度引起的版本变化只增量刷新受影响的待加工队列
@@ -226,6 +247,113 @@ Web 时间轴会在目标机器轨道上显示机器间运输段。运输开始�
 创建 `OperationStartEvent`。工件全部完成后，对应 `Order` 再移入
 `finished_queue`。
 
+## 初始构造算法 API
+
+`InfluenceAwareConstruct` 提供统一的初始解构造入口，可通过方法参数选择：
+
+```text
+FIFO_SPT
+FIFO_EET
+MOPNR_SPT
+MOPNR_EET
+MWKR_SPT
+MWKR_EET
+InfluenceAwareConstruct
+```
+
+Python 侧统一函数为
+`simulator.construction.construct_schedule(...)`。它可以显式接收
+`raw_file`、`additional_file`、`delivery_cost_file` 和 `method`，也可以只传
+`dataset_root`、`instance`、`process_id`，由函数自动解析
+`raw/rawN`、`add/addN` 和 `delivery_cost` 路径：
+
+```python
+from simulator.construction import construct_schedule
+
+result = construct_schedule(
+    dataset_root="datasets",
+    instance="fjsp.brandimarte.Mk03.m8j15c5.fjs",
+    process_id=1,
+    method="InfluenceAwareConstruct",
+)
+```
+
+Web 服务启动后提供两个无需启动仿真即可调用的接口：
+
+```bash
+curl http://127.0.0.1:8000/api/construction/methods
+
+curl -X POST http://127.0.0.1:8000/api/construction \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "dataset_id": "fjsp.brandimarte.Mk03.m8j15c5",
+    "process_id": 2,
+    "method": "MOPNR_SPT"
+  }'
+```
+
+`process_id` 为 `1`–`4`，分别对应冲压、焊装、涂装和总装。响应包含
+`method`、`objectives`、`objective_breakdown`（含加工时间、运输时间、
+加工/运输能耗）、`fifo_baseline` 以及
+`schedule.operations` 中的机器分配、工序顺序和计划起止时间。
+`/api/construct-initial` 是同一 POST 接口的别名。该调用只计算初始构造方案，
+不会修改当前仿真状态；Web 服务需要在可用环境中预先构建
+`InfluenceAwareConstruct/build/influence_aware_scheduler`，也可以通过
+环境变量 `INFLUENCE_AWARE_SCHEDULER_BIN` 指定可执行文件。
+
+模型测试页新增“IAC 调度模型”标签页。选择数据集和构造方法后点击
+“运行测试”；页面固定使用所选实例的冲压工艺（`process_id=1`），并调用
+`POST /api/model-test/construction`，展示
+Makespan、交付成本、总能耗、加工时间、运输时间、作业/机器/工序数量，
+并使用与 HLS 测试相同的甘特图组件展示各机器工序顺序和起止时间：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/model-test/construction \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "dataset_id": "fjsp.brandimarte.Mk03.m8j15c5",
+    "process_id": 1,
+    "method": "InfluenceAwareConstruct"
+  }'
+```
+
+仿真运行期间还可以选择“InfluenceAwareConstruct”作为重调度方式。构造方法
+只提供未完成工序的机器分配，仿真器会基于当前时刻、设备状态、前序实际完工
+时间和运输矩阵重新计算运输段、等待时间及加工起止时间：
+
+```bash
+curl -X POST \
+  http://127.0.0.1:8000/api/influence-aware-reoptimize \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "process_id": 1,
+    "method": "InfluenceAwareConstruct"
+  }'
+```
+
+所有 Web 手动重调度接口在存在实际换机时执行以下两阶段流程：
+
+1. 自动暂停当前运行，完成重调度并返回 `animation_id`、
+   `animation_moves`、来源/目标机器及对应的待加工队列槽位索引。
+2. 前端在待加工队列区域播放每道工序从调度前槽位移动到调度后槽位的动画；
+   全部移动完成后调用 `POST /api/reoptimization-animation-complete`，
+   服务端再恢复运行。
+
+如果动画确认在 15 秒内未到达，服务端会自动恢复运行，防止网络或页面异常
+导致仿真永久暂停。没有实际换机的重调度会直接恢复运行。
+
+统一重调度指令也支持该方式：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/reoptimize-command \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "method": "InfluenceAwareConstruct",
+    "process_id": 1,
+    "config": {"method": "InfluenceAwareConstruct"}
+  }'
+```
+
 ## 重调度 API
 
 仿真运行期间提供两种 API 调用方式。两种方式都会先暂停仿真，完成机器
@@ -242,6 +370,20 @@ Web 时间轴会在目标机器轨道上显示机器间运输段。运输开始�
 计划事件保持不变。
 
 ### 方式一：调用算法专用接口
+
+#### Greedy
+
+内置快速机贪心默认用于 Web 手动重调度。它会把所选工艺中所有
+`pending` 和 `scheduled` 工序分配到当前可用且加工时间最短的机器：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/greedy-reoptimize \
+  -H 'Content-Type: application/json' \
+  -d '{"process_id": 2}'
+```
+
+已开始加工和已完成工序保持原机器；运输、等待和后续加工时间由模拟器重新
+计算。该接口没有随机种子或搜索参数。
 
 #### DRL
 
@@ -310,10 +452,23 @@ HLS 求解器需要完整的静态 FJSP 实例，因此请求使用当前数据�
 外部程序还可以通过 `POST /api/reoptimize-command` 使用统一协议选择算法
 并传入对应参数。接口接收 `method` 和 `config`，可选值如下：
 
+- `method=Greedy`：`config` 必须为空；使用内置快速机贪心。
 - `method=DRL`：`config` 支持 `num_samples`、`seed`。
 - `method=HLS`：`config` 支持 `seed`、`total_time_seconds`、
   `search_mode`、`random_strategy`、`max_repeat_count`、
   `max_iter_count`、`population_size`、`tabu_length`。
+
+Greedy 指令示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/reoptimize-command \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "method": "Greedy",
+    "process_id": 2,
+    "config": {}
+  }'
+```
 
 DRL 指令示例：
 
@@ -397,10 +552,12 @@ max(3, 初始 Job 数量 // 2)
 工序数量和换机信息。
 
 Web 工具栏提供“自动插单”复选框。启用后，服务端在每次事件处理后检查
-未完成 Job 数量，并在数量降到 `max(1, 初始 Job 数量 // 3)` 时调用一次
-动态 Job 提交接口。当前 MK03 的初始 Job 数量为 15，因此剩余 5 个 Job
-时自动新增 7 个 Job。只要复选框保持开启，每次剩余 Job 数再次降到 5 个
-时都会继续自动插单；关闭复选框后停止后续触发。
+当前工艺 `1`（冲压）中尚未完成的 Job 数量，并在数量降到
+`max(1, 初始 Job 数量 // 3)` 时调用一次动态 Job 提交接口。当前 MK03 的
+初始 Job 数量为 15，因此冲压工艺剩余 5 个未完成 Job 时自动新增 7 个
+Job。已完成冲压并进入后续工艺的 Job 不计入该阈值。只要复选框保持开启，
+每次冲压 Job 数再次降到 5 个时都会继续自动插单；关闭复选框后停止后续
+触发。
 “自动插单”和“手动插单”位于页面左侧作业状态面板中，“手动插单”可以在
 仿真运行期间立即触发一次相同的批量插单。
 
@@ -517,9 +674,21 @@ Web 的活动计划快照会在每次事件和仿真结束时重新同步。仿�
   `overview` 请求一致；预测结果 `is_alarm=true` 时，通过模拟器现有的
   `MachineAnomalyEvent` 流程为对应机器随机注入一种设备异常并更新机器状态。
 
-服务地址和刷新参数在 `simulator_config.json → detection_data` 中配置，默认
-地址为 `http://192.168.1.68:8068`。前端维护每台设备最近 `60` 次
-`overview` 快照，并使用 ECharts 绘制以下字段：
+服务地址和刷新参数在 `simulator_config.json → detection_data` 中配置。
+检测源按工艺区分：
+
+- 冲压（`process_id=1`）：`http://127.0.0.1:8068`
+- 焊装（`process_id=2`）：`http://127.0.0.1:8078`
+- 涂装（`process_id=3`）和总装（`process_id=4`）：暂未配置检测源，
+  页面停止轮询并显示未接入提示。
+
+冲压检测源继续使用原有的压缩机故障预测协议。焊装检测源使用 MFDDT
+电机分级检测协议：`overview` 返回 `ref`、`torque`、三轴振动和三相电流
+共 8 个通道，实时告警通过 `/api/v1/detect/batch` 获取 L0–L4 等级、
+`anomaly_type`、异常得分和建议持续时间。焊装不使用 `warn` 预警区或
+未来故障窗口。
+
+前端维护每台设备最近 `60` 次 `overview` 快照，并使用 ECharts 绘制以下字段：
 
 `overview` 请求会按当前调度数据集的 `num_machines` 传入
 `machine_count`。切换数据源时，检测缓冲和卡片会清空，并按新的机器数量
@@ -614,26 +783,26 @@ curl -X POST http://127.0.0.1:8000/api/stop \
 ```json
 {
   "anomaly_handling": {
-    "enabled": false
+    "enabled": true
   }
 }
 ```
 
-默认关闭，此时只进行正常调度仿真：
+当前默认开启，支持通过 Web 或 API 注入设备异常：
 
-- 检测预测仍可调用，但 `is_alarm=true` 不会向模拟器注入异常。
-- “插入设备异常”和“自动插入异常”控件禁用。
-- 异常处置 API 和自动异常设置会返回错误。
-- 不创建 `MachineAnomalyEvent` 或 `MachineRecoveryEvent`，也不会触发异常重调度。
-- 设备状态看板的数据展示不受影响。
+- “插入设备异常”在运行状态下可用。
+- “自动插入异常”可以在 Web 页面开启，服务端每隔 `50` 个仿真时间单位检查一次。
+- 检测预测返回 `is_alarm=true` 时会进入设备异常流程。
+- 每次异常都会创建 `MachineAnomalyEvent`，持续时间结束后创建
+  `MachineRecoveryEvent`。
 
-设置为 `true` 后恢复全部异常处置逻辑。
+如需关闭全部设备异常处置，可设置为 `false`。
 
 | `anomaly_type` | 机器状态 | 可选范围 | 默认值 | 处置方式 |
 | --- | --- | ---: | ---: | --- |
-| `short_failure` | `repairing` | 1–5 | 3 | 中断当前工序，放回原机器待加工队列队首，等待恢复后重新加工 |
-| `medium_failure` | `repairing` | 5–15 | 10 | 中断当前工序，优先转移到其他可加工机器队首；没有替代机器时留在原机器 |
-| `long_failure` | `failed` | 15–45 | 30 | 中断当前工序，故障时执行 DRL 重调度，恢复时再次执行；故障机器不参与分配 |
+| `short_failure` | `repairing` | 5–15 | 10 | 中断当前工序，放回原机器待加工队列队首，等待恢复后重新加工 |
+| `medium_failure` | `repairing` | 15–25 | 20 | 中断当前工序，优先转移到其他可加工机器队首；没有替代机器时留在原机器 |
+| `long_failure` | `failed` | 25–35 | 30 | 中断当前工序，故障时执行 DRL 重调度，恢复时再次执行；故障机器不参与分配 |
 | `degraded` | `degraded` | 10–20 | 15 | 不中断加工，恢复前加工时间乘以 1.5 后向下取整，加工能耗保持不变 |
 
 异常恢复时间统一计算为：
@@ -653,11 +822,12 @@ recovery_time = anomaly_started_at + duration
 1. 机器状态设置为 `failed`。
 2. 当前加工工序被中断，原 `OperationFinishEvent` 被取消。
 3. 已经发生的部分加工能耗保存在 `interrupted_processing_energy`。
-4. 只有故障机器可以加工的工序进入等待恢复列表。
+4. 只有故障机器可以加工的工序进入等待恢复列表；已经进入下一工艺批次窗口
+   但尚未分配机器、且全部候选机器均不可用的 Job，也会进入工艺级等待列表。
 5. 故障时立即调用 DRL 调度器，为未完成工序重新分配加工机器，故障机器
    被强制排除在候选机器之外。
 6. 到达 `recovery_time` 后恢复机器，再次调用 DRL 重调度，将恢复后的机器
-   重新纳入候选机器。
+   重新纳入候选机器，并重新触发被延迟 Job 的目标工艺批量调度。
 7. DRL 输出中仍包含故障机器或缺少动态新增 Job 的工序时，模拟器会排除
    故障机器并补齐这些工序的机器分配，随后重新计算运输时间、运输能耗和
    工序开始时间。
@@ -721,7 +891,7 @@ Web 右侧“异常列表”显示以下四类事件：
 “插入设备异常”弹窗中，设备只显示设备号。切换异常类型时，持续时间输入框
 会自动更新可选范围和默认值。
 
-启用“自动插入异常”后，从启用时刻开始每隔 `40` 个仿真时间单位执行一次：
+启用“自动插入异常”后，从启用时刻开始每隔 `50` 个仿真时间单位执行一次：
 
 1. 从当前 `failed`、`repairing`、`degraded` 之外且没有活动异常的机器中
    随机选择一台。
@@ -730,7 +900,7 @@ Web 右侧“异常列表”显示以下四类事件：
 4. 按正常异常流程创建 `MachineAnomalyEvent`；持续时间结束后创建
    `MachineRecoveryEvent`。
 
-如果触发时所有机器都有活动异常，本次不插入异常，并在下一个 `40` 个
+如果触发时所有机器都有活动异常，本次不插入异常，并在下一个 `50` 个
 仿真时间单位后再次检查。关闭选项后不再产生新的自动异常。
 
 #### 机器异常 API
@@ -880,13 +1050,13 @@ python run.py
 启动后会首先输出 Web 地址：
 
 ```text
-WEB_DASHBOARD=http://192.168.1.68:8000
+WEB_DASHBOARD=http://152.136.171.71:8000
 ```
 
 运行期间浏览器访问：
 
 ```text
-http://192.168.1.68:8000
+http://152.136.171.71:8000
 ```
 
 页面左侧先按提交时间戳显示订单列表，订单内展示该批次全部 Job；下方按

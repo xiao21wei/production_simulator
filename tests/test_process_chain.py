@@ -6,6 +6,7 @@ from simulator.config import DEFAULT_CONFIG_PATH, load_simulator_config
 from simulator.dataset import list_dataset_sources
 from simulator.event import (
     JobFinishEvent,
+    MachineRecoveryEvent,
     ProcessStageBatchScheduleEvent,
     ProcessStageFinishEvent,
     TransportFinishEvent,
@@ -130,6 +131,133 @@ class ProcessChainSimulatorTest(unittest.TestCase):
                 for operation in self.simulator.planned_operations
             },
             {1},
+        )
+
+    def test_stage_batch_defers_single_machine_task_until_recovery(self):
+        job_id = 7
+        job = self.simulator.jobs[job_id]
+        predecessor = job.tasks[21]
+        predecessor.status = "completed"
+        predecessor.actual_end = 555.0
+        predecessor.assigned_machine = 18
+        for task in job.tasks:
+            if task.stage_id == 4:
+                task.status = "blocked"
+
+        self.simulator.curr_time = 550.0
+        anomaly = self.simulator.startMachineAnomaly(
+            23,
+            "long_failure",
+            27,
+            current_time=550.0,
+        )
+        self.assertEqual(anomaly["machine_status"], "failed")
+
+        self.simulator.curr_time = 565.0
+        deferred = []
+        planned = self.simulator.scheduleProcessStageBatch(
+            {job_id: 555.0},
+            4,
+            timestamp=565.0,
+            deferred_operations=deferred,
+        )
+
+        task = job.tasks[28]
+        self.assertEqual(task.status, "pending")
+        self.assertEqual(task.ready_not_before, 577.0)
+        self.assertEqual(job.tasks[29].status, "blocked")
+        self.assertNotIn(
+            (job_id, 28),
+            {
+                (operation.job_id, operation.operation_id)
+                for operation in planned
+            },
+        )
+        self.assertEqual(
+            deferred,
+            [{
+                "job_id": job_id,
+                "operation_id": 28,
+                "stage_id": 4,
+                "machine_id": 23,
+                "recovery_time": 577.0,
+            }],
+        )
+        self.assertIn(
+            (job_id, 28),
+            self.simulator.deferred_process_stage_tasks,
+        )
+
+        recovery_event = next(
+            event
+            for event in self.simulator.event_queue
+            if (
+                isinstance(event, MachineRecoveryEvent)
+                and event.machine_id == 23
+            )
+        )
+        self.simulator.event_queue.remove(recovery_event)
+        self.simulator.curr_time = recovery_event.timestamp
+        self.assertTrue(self.simulator.handleEvent(recovery_event))
+
+        batch_event = next(
+            event
+            for event in self.simulator.event_queue
+            if (
+                isinstance(event, ProcessStageBatchScheduleEvent)
+                and event.stage_id == 4
+                and event.timestamp == 577.0
+                and job_id in event.job_ids
+            )
+        )
+        self.simulator.event_queue.remove(batch_event)
+        self.assertTrue(self.simulator.handleEvent(batch_event))
+
+        self.assertEqual(task.status, "scheduled")
+        self.assertEqual(task.assigned_machine, 23)
+        self.assertNotIn(
+            (job_id, 28),
+            self.simulator.deferred_process_stage_tasks,
+        )
+
+    def test_global_reoptimization_defers_stage_task_without_machine(self):
+        job = self.simulator.jobs[0]
+        task = next(
+            item
+            for item in job.tasks
+            if item.stage_id == 2
+        )
+        for later_task in job.tasks:
+            if (
+                later_task.stage_id == 2
+                and later_task.operation_id > task.operation_id
+            ):
+                later_task.status = "blocked"
+        task.status = "pending"
+        for machine_id in task.eligible_machines:
+            machine = self.simulator.machines[machine_id]
+            machine.machine_status = "repairing"
+            machine.recovery_time = 600.0
+
+        self.simulator.curr_time = 500.0
+        deferred = self.simulator.deferUnavailableTasks(
+            current_time=500.0,
+        )
+
+        key = (job.job_id, task.operation_id)
+        self.assertIn(key, deferred)
+        self.assertIn(
+            key,
+            self.simulator.deferred_process_stage_tasks,
+        )
+        self.simulator.reoptimizeUnfinishedOperations(
+            {},
+            current_time=500.0,
+            stage_ids={2},
+        )
+        self.assertIn(
+            key,
+            self.simulator.deferred_process_stage_tasks,
         )
 
     def test_material_inventory_and_consumption_are_loaded(self):

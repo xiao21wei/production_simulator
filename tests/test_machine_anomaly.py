@@ -136,7 +136,7 @@ class MachineAnomalyTest(unittest.TestCase):
         result = simulator.startMachineAnomaly(
             machine_id,
             "short_failure",
-            2,
+            10,
             current_time=simulator.curr_time,
         )
 
@@ -197,9 +197,9 @@ class MachineAnomalyTest(unittest.TestCase):
 
         for anomaly_type, duration in (
             ("short_failure", 2.5),
-            ("short_failure", 6),
-            ("medium_failure", 4),
-            ("long_failure", 14),
+            ("short_failure", 16),
+            ("medium_failure", 14),
+            ("long_failure", 24),
             ("degraded", 21),
         ):
             with self.subTest(
@@ -261,12 +261,12 @@ class MachineAnomalyTest(unittest.TestCase):
     def test_medium_failure_moves_current_operation_to_other_machine(self):
         simulator, task = self._processing_simulator()
         machine_id = task.assigned_machine
-        recovery_time = simulator.curr_time + 5
+        recovery_time = simulator.curr_time + 20
 
         result = simulator.startMachineAnomaly(
             machine_id,
             "medium_failure",
-            5,
+            20,
             current_time=simulator.curr_time,
         )
 
@@ -511,7 +511,7 @@ class MachineAnomalyTest(unittest.TestCase):
         result = manager.handle_machine_anomaly(
             0,
             "long_failure",
-            20,
+            30,
         )
         key = (task.job_id, task.operation_id)
 
@@ -573,7 +573,7 @@ class MachineAnomalyTest(unittest.TestCase):
                     {
                         "machine_id": 3,
                         "anomaly_type": "degraded",
-                        "duration": 8,
+                        "duration": 15,
                     }
                 ).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
@@ -592,7 +592,7 @@ class MachineAnomalyTest(unittest.TestCase):
             [{
                 "machine_id": 3,
                 "anomaly_type": "degraded",
-                "duration": 8,
+                "duration": 15,
             }],
         )
 

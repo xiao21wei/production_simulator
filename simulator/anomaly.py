@@ -40,14 +40,14 @@ class MachineAnomalyType(str, Enum):
 DEGRADED_PROCESSING_FACTOR = 1.5
 
 MACHINE_ANOMALY_DURATION_RANGES = {
-    MachineAnomalyType.SHORT_FAILURE: (1, 5),
-    MachineAnomalyType.MEDIUM_FAILURE: (5, 15),
-    MachineAnomalyType.LONG_FAILURE: (15, 45),
+    MachineAnomalyType.SHORT_FAILURE: (5, 15),
+    MachineAnomalyType.MEDIUM_FAILURE: (15, 25),
+    MachineAnomalyType.LONG_FAILURE: (25, 35),
     MachineAnomalyType.DEGRADED: (10, 20),
 }
 MACHINE_ANOMALY_DEFAULT_DURATIONS = {
-    MachineAnomalyType.SHORT_FAILURE: 3,
-    MachineAnomalyType.MEDIUM_FAILURE: 10,
+    MachineAnomalyType.SHORT_FAILURE: 10,
+    MachineAnomalyType.MEDIUM_FAILURE: 20,
     MachineAnomalyType.LONG_FAILURE: 30,
     MachineAnomalyType.DEGRADED: 15,
 }

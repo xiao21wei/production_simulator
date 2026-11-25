@@ -92,7 +92,7 @@ class MaterialEventTest(unittest.TestCase):
         )
         self.assertEqual(
             simulator.material_replenishment_lead_time,
-            5.0,
+            20.0,
         )
         self.assertEqual(
             simulator.material_replenishment_target_factor,
@@ -174,6 +174,15 @@ class MaterialEventTest(unittest.TestCase):
         self.assertEqual(
             replenishment_data["type"],
             "MaterialReplenishmentEvent",
+        )
+        self.assertEqual(replenishment_data["lead_time"], 20.0)
+        recovery_data = serialize_event(
+            recovery_event,
+            simulator,
+        )
+        self.assertEqual(
+            recovery_data["replenishment_event_id"],
+            replenishment_event.id,
         )
 
     def test_all_four_processes_have_start_material_requirements(self):

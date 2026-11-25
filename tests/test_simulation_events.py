@@ -144,7 +144,7 @@ class SimulationEventTest(unittest.TestCase):
         result = manager.handle_machine_anomaly(
             machine_id,
             "short_failure",
-            2,
+            10,
         )
 
         anomaly_event = next(
@@ -157,11 +157,11 @@ class SimulationEventTest(unittest.TestCase):
             EventType.MACHINE_ANOMALY,
         )
         self.assertEqual(anomaly_event.machine_id, machine_id)
-        self.assertEqual(anomaly_event.duration, 2)
+        self.assertEqual(anomaly_event.duration, 10)
         self.assertEqual(result["event_id"], anomaly_event.id)
         event_data = serialize_event(anomaly_event, simulator)
         self.assertEqual(event_data["machine_id"], machine_id)
-        self.assertEqual(event_data["duration"], 2)
+        self.assertEqual(event_data["duration"], 10)
         self.assertEqual(event_data["machine_status"], "repairing")
         recovery_event = next(
             event

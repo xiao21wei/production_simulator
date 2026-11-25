@@ -30,7 +30,7 @@ class AutoMachineAnomalyTest(unittest.TestCase):
         manager.state.set_running(simulator)
         return simulator, manager
 
-    def test_auto_machine_anomaly_triggers_every_40_steps(self):
+    def test_auto_machine_anomaly_triggers_every_50_steps(self):
         simulator, manager = self._manager()
         simulator.machines[0].machine_status = "failed"
         simulator.machines[0].anomaly_type = "long_failure"
@@ -46,9 +46,9 @@ class AutoMachineAnomalyTest(unittest.TestCase):
         self.assertTrue(result["auto_machine_anomaly"]["enabled"])
         self.assertEqual(
             manager.next_auto_machine_anomaly_time,
-            40,
+            50,
         )
-        simulator.curr_time = 39
+        simulator.curr_time = 49
         manager._maybe_auto_insert_machine_anomaly()
         self.assertEqual(calls, [])
 
@@ -62,7 +62,7 @@ class AutoMachineAnomalyTest(unittest.TestCase):
             random_cls.return_value.choice.side_effect = choose
             random_cls.return_value.randint.return_value = 5
 
-            simulator.curr_time = 40
+            simulator.curr_time = 50
             manager._maybe_auto_insert_machine_anomaly()
             self.assertEqual(len(calls), 1)
             self.assertNotEqual(calls[0][0], 0)
@@ -70,20 +70,20 @@ class AutoMachineAnomalyTest(unittest.TestCase):
             self.assertEqual(calls[0][2], 5)
             self.assertEqual(
                 manager.next_auto_machine_anomaly_time,
-                80,
+                100,
             )
 
-            simulator.curr_time = 79
+            simulator.curr_time = 99
             manager._maybe_auto_insert_machine_anomaly()
             self.assertEqual(len(calls), 1)
-            simulator.curr_time = 80
+            simulator.curr_time = 100
             manager._maybe_auto_insert_machine_anomaly()
             self.assertEqual(len(calls), 2)
 
         self.assertEqual(manager.auto_machine_anomaly_count, 2)
         state = manager.state.snapshot()["auto_machine_anomaly"]
         self.assertEqual(state["count"], 2)
-        self.assertEqual(state["next_time"], 120)
+        self.assertEqual(state["next_time"], 150)
         self.assertEqual(state["last"]["duration"], 5)
 
         manager.set_auto_machine_anomaly(False)

@@ -143,6 +143,13 @@ def _validate_config(config):
         or not visualization["host"]
     ):
         raise ValueError("visualization.host must be a non-empty string.")
+    if "public_host" in visualization and (
+        not isinstance(visualization["public_host"], str)
+        or not visualization["public_host"]
+    ):
+        raise ValueError(
+            "visualization.public_host must be a non-empty string."
+        )
     if "port" in visualization and (
         not isinstance(visualization["port"], int)
         or isinstance(visualization["port"], bool)
@@ -159,6 +166,48 @@ def _validate_config(config):
             or not detection_data["base_url"]
         ):
             raise ValueError("detection_data.base_url must be non-empty.")
+        process_base_urls = detection_data.get("process_base_urls", {})
+        if not isinstance(process_base_urls, dict):
+            raise ValueError(
+                "detection_data.process_base_urls must be a JSON object."
+            )
+        for process_id, base_url in process_base_urls.items():
+            try:
+                normalized_process_id = int(process_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "detection_data.process_base_urls keys must be integers."
+                ) from exc
+            if normalized_process_id < 1:
+                raise ValueError(
+                    "detection_data.process_base_urls keys must be positive."
+                )
+            if not isinstance(base_url, str) or not base_url:
+                raise ValueError(
+                    "detection_data.process_base_urls values must be "
+                    "non-empty strings."
+                )
+        process_protocols = detection_data.get("process_protocols", {})
+        if not isinstance(process_protocols, dict):
+            raise ValueError(
+                "detection_data.process_protocols must be a JSON object."
+            )
+        for process_id, protocol in process_protocols.items():
+            try:
+                normalized_process_id = int(process_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "detection_data.process_protocols keys must be integers."
+                ) from exc
+            if normalized_process_id < 1:
+                raise ValueError(
+                    "detection_data.process_protocols keys must be positive."
+                )
+            if protocol not in {"legacy", "mfddt"}:
+                raise ValueError(
+                    "detection_data.process_protocols values must be "
+                    "'legacy' or 'mfddt'."
+                )
         _require_positive_number(
             detection_data,
             "timeout",
